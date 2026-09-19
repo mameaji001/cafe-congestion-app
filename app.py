@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date, time
 import json
 import os
 from google import genai
@@ -15,7 +15,7 @@ st.set_page_config(
 
 st.title("☕ 全国対応 カフェ最適解ナビ")
 st.write(
-    "GPSや手動指定からエリア・時間を自動／任意で反映し、天気情報と連動してベストなカフェをご提案します。"
+    "GPSや手動指定からエリア・時間を反映し、天気情報と連動してベストなカフェをご提案します。"
 )
 
 # 日本時間を取得（UTC+9）
@@ -59,7 +59,7 @@ def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
     prompt = f"""
         あなたは日本全国の地理とカフェ事情に精通したプロフェッショナルです。
         「{area_name}」の周辺に実在する代表的なカフェ（大手チェーン、人気店、個人店など）を3店舗挙げてください。
-        現在の状況は「{current_hour}時」、天気は「{'雨・悪天候' if is_rainy else '晴れ・曇り'}」です。
+        現在の状況は「{current_hour}時」、天気はクラウド基準で「{'雨・悪天候' if is_rainy else '晴れ・曇り'}」です。
         
         以下のJSON形式（マークダウンのコードブロックなし、プレーンなJSONのみ）で正確に出力してください。
         {{
@@ -94,20 +94,20 @@ def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
 
 
 # ==========================================
-# 3. 画面UI：モード選択
+# 3. 画面UI：モード選択 ＆ 入力フォーム
 # ==========================================
 st.subheader("📍 検索モードの選択")
 mode = st.radio(
     "検索方法を選んでください",
     [
         "📍 【今すぐ】GPS現在地と現在時刻を自動反映",
-        "🚃 【未来・指定】場所と時間を手動で自由選択",
+        "🚃 【未来・指定】場所・日付・時間を自由に選択",
     ],
     horizontal=False,
 )
 
 target_area = ""
-current_hour = now_jst.hour
+target_datetime = now_jst
 is_rainy = False
 weather_info_text = ""
 
@@ -115,24 +115,21 @@ if "今すぐ" in mode:
   st.write("🔄 GPSから現在地を取得中...")
   loc = get_geolocation()
 
-  if loc:
+  if loc and "coords" in loc:
     lat = loc["coords"]["latitude"]
     lon = loc["coords"]["longitude"]
-    st.success(
-        f"GPS取得成功（緯度: {lat:.2f}, 経度: {lon:.2f}）。位置情報を元にエリアを特定します。"
-    )
-    target_area = "渋谷駅周辺"
+    st.success(f"GPS取得成功（緯度: {lat:.2f}, 経度: {lon:.2f}）")
+    target_area = "現在地周辺"
     is_rainy, weather_info_text = get_weather_by_latlon(lat, lon)
   else:
-    st.info(
-        "ブラウザの位置情報許可を確認中、またはシミュレーション環境です（初期値として渋谷駅周辺で代行します）。"
-    )
-    target_area = "渋谷駅周辺"
+    st.warning("⚠️ スマホのGPSがうまく取得できませんでした。下のフォームにエリア名を入力してください。")
+    manual_fallback = st.text_input("🔍 代わりのエリア・駅名を入力", value="渋谷駅周辺")
+    target_area = manual_fallback
     is_rainy, weather_info_text = get_weather_by_latlon(35.6581, 139.7016)
 
+  target_datetime = now_jst
   st.info(
-      f"🕒 **自動反映（日本時間）**：現在 {current_hour}時 ｜ ☁️"
-      f" **自動取得した天気**： {weather_info_text}"
+      f"🕒 **現在時刻**：{target_datetime.strftime('%Y年%m月%d日 %H:%M')} ｜ ☁️ **天気**：{weather_info_text}"
   )
 
 else:
@@ -142,14 +139,37 @@ else:
       "新宿駅周辺",
       help="日本全国どの都道府県・駅名でもOKです",
   )
-  col_t1, col_t2 = st.columns(2)
-  with col_t1:
-    current_hour = st.slider("⏰ 時間帯を選択", 0, 23, current_hour)
-  with col_t2:
-    is_weekend = st.checkbox("土日祝日ですか？", value=False)
+  
+  # 日付選択
+  selected_date = st.date_input("📅 日付を選択", date.today())
+  
+  # センスの良い時間選択（ラベル付きの辞書で直感的に）
+  time_options = {
+      "07:00 (早朝・開店直後)": 7,
+      "08:00 (朝活・通勤前)": 8,
+      "09:00 (午前・比較的落ち着き)": 9,
+      "10:00 (午前・ティータイム前)": 10,
+      "11:00 (お昼直前・少しずつ混雑)": 11,
+      "12:00 (ランチタイム・満席注意)": 12,
+      "13:00 (ランチピーク・混雑)": 13,
+      "14:00 (午後のカフェタイム開始)": 14,
+      "15:00 (午後一番の混雑ピーク)": 15,
+      "16:00 (夕方・少しずつ空き始める)": 16,
+      "17:00 (夕方・仕事帰りの流れ込み)": 17,
+      "18:00 (夜・ディナー前の一休み)": 18,
+      "19:00 (夜・落ち着く時間帯)": 19,
+      "20:00 (夜遅め・穴場タイム)": 20,
+      "21:00 (夜間・静かに過ごせる)": 21,
+  }
+  
+  selected_time_label = st.selectbox("⏰ 時間帯を選択", list(time_options.keys()), index=8) # デフォルト15:00
+  selected_hour = time_options[selected_time_label]
+  
+  target_datetime = datetime.combine(selected_date, time(selected_hour, 0)).replace(tzinfo=JST)
 
+  # 天気はデフォルト（東京基準でシミュレーション）
   is_rainy, weather_info_text = get_weather_by_latlon(35.6894, 139.6917)
-  st.info(f"☁️ **自動取得した天気予報**： {weather_info_text}")
+  st.info(f"☁️ **天気予報データ**： {weather_info_text}")
 
 st.markdown("---")
 
@@ -162,9 +182,9 @@ purpose = st.selectbox(
 # 4. 実行ボタンとロジック処理
 # ==========================================
 if st.button("🚀 ベストなカフェを探す", type="primary", use_container_width=True):
-  with st.spinner(
-      f"「{target_area}」の実在店舗データとリアルタイム状況を分析中..."
-  ):
+  current_hour = target_datetime.hour
+  
+  with st.spinner(f"「{target_area}」の店舗データとリアルタイム状況を分析中..."):
     ai_data, err = fetch_cafes_by_ai(target_area, is_rainy, current_hour)
 
     if err or not ai_data:
@@ -172,6 +192,7 @@ if st.button("🚀 ベストなカフェを探す", type="primary", use_containe
     else:
       st.markdown(f"### 📍 「{target_area}」の分析結果")
       st.write(f"💡 {ai_data.get('area_comment', '')}")
+      st.markdown(f"🗓️ 指定日時: **{target_datetime.strftime('%Y年%m月%d日 %H:00')}**")
       st.markdown("---")
 
       cafes = ai_data.get("cafes", [])
@@ -181,12 +202,10 @@ if st.button("🚀 ベストなカフェを探す", type="primary", use_containe
         score = cafe.get("base_crowd", 50)
         reasons = []
 
-        # 時間帯による補正（夜遅くは空くロジックを反映）
+        # 時間帯による補正
         if 20 <= current_hour or current_hour < 8:
           score -= 35
-          reasons.append(
-              "夜遅い時間帯のため、客足が引いて比較的空いています（穴場）"
-          )
+          reasons.append("夜遅い時間帯のため、客足が引いて比較的空いています（穴場）")
         elif 12 <= current_hour <= 14:
           score += 15
           reasons.append("お昼時のため混雑しやすい時間帯です")
