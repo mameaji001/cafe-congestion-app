@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from google import genai
@@ -18,9 +18,13 @@ st.write(
     "GPSや手動指定からエリア・時間を自動／任意で反映し、天気情報と連動してベストなカフェをご提案します。"
 )
 
+# 日本時間を取得（UTC+9）
+JST = timezone(timedelta(hours=+9), "JST")
+now_jst = datetime.now(JST)
+
 
 # ==========================================
-# 1. 天気自動取得関数（Open-Meteo API活用：無料・キー不要）
+# 1. 天気自動取得関数（Open-Meteo API活用）
 # ==========================================
 def get_weather_by_latlon(lat, lon):
   try:
@@ -30,7 +34,6 @@ def get_weather_by_latlon(lat, lon):
     code = data["current"]["weather_code"]
     temp = data["current"]["temperature_2m"]
 
-    # WMO Weather interpretation codes (簡易判定: 51以上は雨や雪などの悪天候とみなす)
     is_rainy = code >= 51
     weather_desc = (
         "雨・悪天候" if is_rainy else "晴れ・曇り（良好なコンディション）"
@@ -41,7 +44,7 @@ def get_weather_by_latlon(lat, lon):
 
 
 # ==========================================
-# 2. Gemini APIによる全国のリアル店舗＆イベントデータ取得
+# 2. Gemini APIによる全国のリアル店舗データ取得
 # ==========================================
 def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
   api_key = os.environ.get("GEMINI_API_KEY")
@@ -73,7 +76,6 @@ def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
         }}
         """
 
-    # 最新の推奨モデルに更新
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt,
@@ -92,7 +94,7 @@ def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
 
 
 # ==========================================
-# 3. 画面UI：モード選択（自動 vs 任意指定）
+# 3. 画面UI：モード選択
 # ==========================================
 st.subheader("📍 検索モードの選択")
 mode = st.radio(
@@ -105,12 +107,10 @@ mode = st.radio(
 )
 
 target_area = ""
-current_hour = datetime.now().hour
-is_weekend = datetime.now().weekday() >= 5
+current_hour = now_jst.hour
 is_rainy = False
 weather_info_text = ""
 
-# --- モード別の値設定 ---
 if "今すぐ" in mode:
   st.write("🔄 GPSから現在地を取得中...")
   loc = get_geolocation()
@@ -121,7 +121,7 @@ if "今すぐ" in mode:
     st.success(
         f"GPS取得成功（緯度: {lat:.2f}, 経度: {lon:.2f}）。位置情報を元にエリアを特定します。"
     )
-    target_area = "渋谷駅周辺"  # 実運用では逆ジオコーディング等に対応可能
+    target_area = "渋谷駅周辺"
     is_rainy, weather_info_text = get_weather_by_latlon(lat, lon)
   else:
     st.info(
@@ -131,8 +131,8 @@ if "今すぐ" in mode:
     is_rainy, weather_info_text = get_weather_by_latlon(35.6581, 139.7016)
 
   st.info(
-      f"🕒 **自動反映**：現在 {current_hour}時 ｜ ☁️ **自動取得した天気**："
-      f" {weather_info_text}"
+      f"🕒 **自動反映（日本時間）**：現在 {current_hour}時 ｜ ☁️"
+      f" **自動取得した天気**： {weather_info_text}"
   )
 
 else:
@@ -144,7 +144,7 @@ else:
   )
   col_t1, col_t2 = st.columns(2)
   with col_t1:
-    current_hour = st.slider("⏰ 時間帯を選択", 0, 23, 14)
+    current_hour = st.slider("⏰ 時間帯を選択", 0, 23, current_hour)
   with col_t2:
     is_weekend = st.checkbox("土日祝日ですか？", value=False)
 
@@ -153,10 +153,10 @@ else:
 
 st.markdown("---")
 
-# 目的の選択
 purpose = st.selectbox(
     "🎯 今日の目的は？", ["作業したい", "サクッと休憩", "おしゃべり・ゆっくり"]
 )
+
 
 # ==========================================
 # 4. 実行ボタンとロジック処理
@@ -172,11 +172,6 @@ if st.button("🚀 ベストなカフェを探す", type="primary", use_containe
     else:
       st.markdown(f"### 📍 「{target_area}」の分析結果")
       st.write(f"💡 {ai_data.get('area_comment', '')}")
-      if is_rainy:
-        st.warning(
-            "🌧️ **雨天連動補正**: 駅チカ店舗の混雑度が上がり、駅から離れた店舗が穴場として評価されます。"
-        )
-
       st.markdown("---")
 
       cafes = ai_data.get("cafes", [])
@@ -186,8 +181,13 @@ if st.button("🚀 ベストなカフェを探す", type="primary", use_containe
         score = cafe.get("base_crowd", 50)
         reasons = []
 
-        # 時間帯による補正
-        if 12 <= current_hour <= 14:
+        # 時間帯による補正（夜遅くは空くロジックを反映）
+        if 20 <= current_hour or current_hour < 8:
+          score -= 35
+          reasons.append(
+              "夜遅い時間帯のため、客足が引いて比較的空いています（穴場）"
+          )
+        elif 12 <= current_hour <= 14:
           score += 15
           reasons.append("お昼時のため混雑しやすい時間帯です")
         elif 14 <= current_hour <= 18:
@@ -199,9 +199,7 @@ if st.button("🚀 ベストなカフェを探す", type="primary", use_containe
         if is_rainy:
           if walk <= 2:
             score += 20
-            reasons.append(
-                "雨天のため、駅から近い店舗に人が集中しています"
-            )
+            reasons.append("雨天のため、駅から近い店舗に人が集中しています")
           else:
             score -= 15
             reasons.append("駅から少し歩くため、雨の日でも比較的空いています")
@@ -217,14 +215,12 @@ if st.button("🚀 ベストなカフェを探す", type="primary", use_containe
             {"cafe": cafe, "crowd": final_score, "reasons": reasons}
         )
 
-      # 混雑度が低い順に並べ替え
       scored_list.sort(key=lambda x: x["crowd"])
 
       if scored_list:
         best = scored_list[0]
         bc = best["cafe"]
 
-        # 最適解の表示
         st.success("✨ **今ここがおすすめです！**")
         st.markdown(f"### 📍 **{bc['name']}**")
         st.write(
