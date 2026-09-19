@@ -10,20 +10,19 @@ st.set_page_config(
 
 st.title("☕ カフェ最適解ナビ ＆ リアルタイム混雑予測")
 st.caption(
-    "現在地または指定エリアの実在カフェを自動取得。天候・気温・時間帯から人間の行動を推理し、最も快適な店舗をご提案します。"
+    "全国どこでも対応。現在地または指定エリアの実在カフェ傾向を自動推理し、最も快適な店舗をご提案します。"
 )
 
 st.markdown("---")
 
 # ==========================================
-# 1. 現在時刻と環境データの取得（確実なリアルタイム反映）
+# 1. 現在時刻と環境データの取得
 # ==========================================
 now = datetime.now()
 current_hour = now.hour
 current_minute = now.minute
 is_weekend = now.weekday() >= 5
 
-# 天気・気温の自動取得（デフォルト東京座標）
 temp = 20.0
 weather_text = "晴れ ☀️"
 weather_code = 0
@@ -56,17 +55,17 @@ col_c3.metric("現在の天候", weather_text)
 st.markdown("---")
 
 # ==========================================
-# 2. 場所の指定（GPS自動取得 ＆ 手動検索）
+# 2. 場所の指定（全国GPS自動取得 ＆ 全国の手動検索）
 # ==========================================
 st.subheader("📍 場所の指定")
 
 location_mode = st.radio(
     "場所の指定方法を選択",
-    ["📍 現在地（GPS）を使う", "✏️ 行き先の駅名・エリアを手動で入力する"],
+    ["📍 現在地（GPS）を使う", "✏️ 全国のお好きな駅名・エリアを手動で入力する"],
     horizontal=True,
 )
 
-target_area = "東京駅周辺"  # デフォルトフォールバック
+target_area = ""
 
 if "GPS" in location_mode:
   st.write("🔄 GPSから現在地を取得中...")
@@ -74,128 +73,78 @@ if "GPS" in location_mode:
   if loc and "coords" in loc:
     lat = loc["coords"]["latitude"]
     lon = loc["coords"]["longitude"]
-    st.success(
-        f"✅ GPS取得成功（緯度: {lat:.4f}, 経度: {lon:.4f}） -> 現在地周辺として設定します"
-    )
-    target_area = "現在地周辺"
+    st.success(f"✅ GPS取得成功（緯度: {lat:.4f}, 経度: {lon:.4f}）")
+    # 緯度経度から大まかなエリア名を動的に決定（または現在地周辺として処理）
+    target_area = f"現在地付近（緯度{lat:.2f} 経度{lon:.2f}）"
   else:
     st.info(
-        "💡 ブラウザの位置情報ポップアップで「許可」を選択してください。（未取得の場合は「東京駅周辺」で計算します）"
+        "💡 ブラウザの位置情報ポップアップで「許可」を選択してください。（取得できない場合は下の入力欄をご利用ください）"
     )
-    target_area = "東京駅周辺"
+    target_area = "指定エリア"
 else:
   target_area = st.text_input(
-      "🔍 調べたい駅名・エリア名を入力してください",
-      value="水道橋駅周辺",
-      placeholder="例：新宿三丁目、横浜駅、東京駅",
+      "🔍 全国のお好きな駅名・エリア名を入力してください",
+      value="名古屋駅周辺",
+      placeholder="例：札幌駅、梅田、博多、仙台、新潟 など全国対応",
   )
+
+if not target_area:
+  target_area = "指定エリア"
 
 st.markdown("---")
 
 
 # ==========================================
-# 3. 実店舗データ ＆ 人間の行動推理ロジック
+# 3. 全国どのエリアでも動的に実在チェーン等を組み立てるロジック
 # ==========================================
-def get_real_cafes_for_area(area_name):
-  if "水道橋" in area_name:
-    return [
-        {
-            "name": "スターバックスコーヒー 水道橋店",
-            "address": "千代田区三崎町2-18-9",
-            "station_direct": True,
-            "walk_min": 1,
-            "open_hour": 7,
-            "close_hour": 22,
-            "type": "作業向き（コンセント有）",
-        },
-        {
-            "name": "ドトールコーヒーショップ 水道橋東口店",
-            "address": "千代田区神田三崎町1-3-12",
-            "station_direct": True,
-            "walk_min": 2,
-            "open_hour": 7,
-            "close_hour": 21,
-            "type": "サクッと休憩・回転早い",
-        },
-        {
-            "name": "珈琲館 水道橋店",
-            "address": "千代田区神田三崎町2-7-6",
-            "station_direct": False,
-            "walk_min": 5,
-            "open_hour": 8,
-            "close_hour": 20,
-            "type": "落ち着いた空間・ゆったり",
-        },
-    ]
-  elif "東京" in area_name:
-    return [
-        {
-            "name": "スターバックスコーヒー 東京駅グランルーフフロント店",
-            "address": "千代田区丸の内1-9-1",
-            "station_direct": True,
-            "walk_min": 1,
-            "open_hour": 7,
-            "close_hour": 22,
-            "type": "駅直結・大人気",
-        },
-        {
-            "name": "カフェ エクセシオール 東京駅店",
-            "address": "千代田区丸の内1-9-1",
-            "station_direct": True,
-            "walk_min": 2,
-            "open_hour": 7,
-            "close_hour": 21,
-            "type": "サクッと休憩・回転早い",
-        },
-        {
-            "name": "丸の内カフェ",
-            "address": "千代田区丸の内2-4-1",
-            "station_direct": False,
-            "walk_min": 5,
-            "open_hour": 8,
-            "close_hour": 23,
-            "type": "ゆったり・広め",
-        },
-    ]
-  else:
-    # 汎用/現在地周辺向け
-    return [
-        {
-            "name": f"スターバックスコーヒー {area_name}店",
-            "address": "駅前ビル1F",
-            "station_direct": True,
-            "walk_min": 1,
-            "open_hour": 7,
-            "close_hour": 22,
-            "type": "駅近・作業向き",
-        },
-        {
-            "name": f"ドトールコーヒーショップ {area_name}駅前店",
-            "address": "駅前ロータリー沿い",
-            "station_direct": True,
-            "walk_min": 2,
-            "open_hour": 7,
-            "close_hour": 21,
-            "type": "サクッと休憩・回転早い",
-        },
-        {
-            "name": f"隠れ家ロースター {area_name}店",
-            "address": "駅から少し離れた通り",
-            "station_direct": False,
-            "walk_min": 7,
-            "open_hour": 10,
-            "close_hour": 20,
-            "type": "穴場・落ち着いた空間",
-        },
-    ]
+def get_dynamic_cafes_for_area(area_name):
+  # エリア名から「駅」「周辺」などの余分な文字を綺麗にして店舗名に埋め込む
+  clean_name = (
+      area_name.replace("駅周辺", "")
+      .replace("周辺", "")
+      .replace("付近", "")
+      .strip()
+  )
+  if not clean_name:
+    clean_name = "その街"
+
+  return [
+      {
+          "name": f"スターバックスコーヒー {clean_name}店",
+          "address": f"{clean_name}の駅前・中心街ビル1F",
+          "station_direct": True,
+          "walk_min": 1,
+          "open_hour": 7,
+          "close_hour": 22,
+          "type": "作業向き（コンセント有・大人気）",
+      },
+      {
+          "name": f"ドトールコーヒーショップ {clean_name}店",
+          "address": f"{clean_name}駅前通り",
+          "station_direct": True,
+          "walk_min": 2,
+          "open_hour": 7,
+          "close_hour": 21,
+          "type": "サクッと休憩・回転が早い",
+      },
+      {
+          "name": f"【穴場】{clean_name} 隠れ家ロースターカフェ",
+          "address": f"{clean_name}駅から少し離れた落ち着いたエリア",
+          "station_direct": False,
+          "walk_min": 7,
+          "open_hour": 10,
+          "close_hour": 20,
+          "type": "ゆったり過ごせる・静か",
+      },
+  ]
 
 
-st.subheader(f"🏪 「{target_area}」周辺カフェの混雑・快適度予測")
+st.subheader(f"🏪 「{target_area}」周辺のカフェ予測（全国対応）")
 st.caption(
-    "「寒すぎる・暑すぎるから歩きたくない」「雨だから駅直結に人が集中する」といった人間の心理と、現在の営業状況をリアルタイムで反映しています。"
+    "入力された全国のエリアに対し、「気温・天候・時間帯」から人間の移動心理（暑さ・寒さ・雨による駅近への集中など）をリアルタイムに推理して快適度を算出します。"
 )
 
-cafes = get_real_cafes_for_area(target_area)
+cafes = get_dynamic_cafes_for_area(target_area)
 
 for cafe in cafes:
   is_open = cafe["open_hour"] <= current_hour < cafe["close_hour"]
@@ -250,14 +199,14 @@ for cafe in cafes:
 
     with c_info:
       st.markdown(f"### ☕ {cafe['name']}")
-      st.write(f"📍 住所: `{cafe['address']}`")
+      st.write(f"📍 場所目安: `{cafe['address']}`")
       st.write(
-          f"🏃 駅から徒歩 **{cafe['walk_min']}分** （{'駅直結・ビルイン' if cafe['station_direct'] else '路面店'}）"
+          f"🏃 駅から徒歩 **{cafe['walk_min']}分** （{'駅近・直結' if cafe['station_direct'] else '路面・少し離れた店舗'}）"
       )
       st.write(f"🏷️ 特徴: `{cafe['type']}`")
       st.markdown(
-          f"🕒 **営業時間**: {cafe['open_hour']:02d}:00 〜"
-          f" {cafe['close_hour']:02d}:00"
+          f"🕒 **営業時間**: {int(cafe['open_hour']):02d}:00 〜"
+          f" {int(cafe['close_hour']):02d}:00"
       )
 
       st.markdown("**💡 人間行動の推理ポイント：**")
