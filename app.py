@@ -77,7 +77,7 @@ def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
         """
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt,
     )
 
