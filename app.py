@@ -24,7 +24,7 @@ def generate_cafes_for_area(target_area):
           "type": "作業向き（コンセント多め）",
           "walk_min": 2,
           "base_crowd": 80,
-          "close_hour": 22,  # 22時閉店
+          "close_hour": 22,
       },
       {
           "name": f"ドトールコーヒーショップ {target_area}駅前店",
@@ -32,7 +32,7 @@ def generate_cafes_for_area(target_area):
           "type": "サクッと休憩・回転早い",
           "walk_min": 1,
           "base_crowd": 85,
-          "close_hour": 21,  # 21時閉店
+          "close_hour": 21,
       },
       {
           "name": f"地域密着ロースター {target_area}隠れ家カフェ",
@@ -40,7 +40,7 @@ def generate_cafes_for_area(target_area):
           "type": "おしゃべり・落ち着いた空間",
           "walk_min": 7,
           "base_crowd": 40,
-          "close_hour": 20,  # 20時閉店（早い）
+          "close_hour": 20,
       },
       {
           "name": f"大手カフェチェーン {target_area}中央通り店",
@@ -48,7 +48,7 @@ def generate_cafes_for_area(target_area):
           "type": "作業向き（コンセント多め）",
           "walk_min": 4,
           "base_crowd": 70,
-          "close_hour": 23,  # 23時閉店
+          "close_hour": 23,
       },
   ]
 
@@ -61,7 +61,6 @@ def fetch_weather(lat, lon):
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
     res = requests.get(url, timeout=3).json()
     wcode = res.get("current_weather", {}).get("weathercode", 0)
-    # WMO Weather interpretation codes (簡易判定: 51以上は雨・雪など)
     if wcode >= 51:
       return True, "雨・悪天候 🌧️"
     else:
@@ -87,7 +86,7 @@ def calculate_best_cafe(
     if target_hour >= cafe["close_hour"]:
       is_closed = True
       reasons.append(
-          f"⚠️ 21時以降など、指定時間（{target_hour}時）にはすでに閉店しています"
+          f"⚠️ 指定された時間（{target_hour}時）にはすでに閉店しています"
       )
       scored_cafes.append(
           {
@@ -99,7 +98,6 @@ def calculate_best_cafe(
       )
       continue
 
-    # 閉店間際の場合の警告
     if target_hour == cafe["close_hour"] - 1:
       reasons.append("⏰ まもなく閉店時間のためご注意ください")
 
@@ -148,13 +146,12 @@ def calculate_best_cafe(
         {"cafe": cafe, "crowd": final_crowd, "reasons": reasons, "is_closed": False}
     )
 
-  # 営業中で混雑度が最も低いものを最適解とする
   open_cafes = [c for c in scored_cafes if not c["is_closed"]]
   if open_cafes:
     open_cafes.sort(key=lambda x: x["crowd"])
     best = open_cafes[0]
   else:
-    best = scored_cafes[0]  (# すべて閉店の場合)
+    best = scored_cafes[0]
 
   return best, scored_cafes
 
@@ -169,35 +166,29 @@ st.caption(
 
 st.divider()
 
-# --- マスト入力セクション ---
+# マスト入力セクション
 st.subheader("📌 1. 場所・時間・天気の指定")
 
-# GPS取得（自動）
 loc = get_geolocation()
-default_area = "東京"
-lat, lon = 35.6812, 139.7671
+default_area = "渋谷"
+lat, lon = 35.6580, 139.7016
 
 if loc and "coords" in loc:
   lat = loc["coords"]["latitude"]
   lon = loc["coords"]["longitude"]
   st.success("📍 現在地のGPS座標を正常に取得しました！")
 else:
-  st.info(
-      "📍 GPS取得を試行中、または手動入力モードです。下のエリア名を自由に変更できます。"
-  )
+  st.info("📍 GPS取得を試行中、または手動入力モードです。")
 
-# エリア名入力
 target_area = st.text_input(
     "🏠 検索したい駅名・エリアを入力",
     value=default_area,
     help="例: 渋谷、新宿、京都、横浜、梅田など",
 )
 
-# 天気の自動取得
 is_rain, weather_text = fetch_weather(lat, lon)
 st.write(f"☁️ **現在の周辺天気（自動取得）**: {weather_text}")
 
-# 時間の指定（デフォルトは現在時刻）
 now = datetime.now()
 col_t1, col_t2 = st.columns(2)
 with col_t1:
@@ -210,7 +201,6 @@ is_weekend = target_date.weekday() >= 5
 
 st.divider()
 
-# 目的の選択
 st.subheader("🎯 2. カフェの利用目的")
 purpose = st.selectbox(
     "今日のあなたの目的は？",
@@ -219,7 +209,6 @@ purpose = st.selectbox(
 
 st.markdown("---")
 
-# 実行ボタン
 if st.button("🚀 今すぐベストな店を見る", type="primary", use_container_width=True):
   if not target_area.strip():
     st.warning("エリア名または駅名を入力してください。")
@@ -247,7 +236,6 @@ if st.button("🚀 今すぐベストな店を見る", type="primary", use_conta
             f" `{cafe['type']}` ｜ 🌙 閉店時間: **{cafe['close_hour']}時**"
         )
 
-        # 混雑度
         if crowd < 50:
           st.metric(
               label="現在の予想混雑度",
@@ -263,14 +251,12 @@ if st.button("🚀 今すぐベストな店を見る", type="primary", use_conta
               delta_color="inverse",
           )
 
-      # 理由
       st.markdown("**💡 判定ポイント・理由：**")
       for r in best_result["reasons"]:
         st.write(f"- {r}")
 
       st.markdown("---")
 
-      # ほかの店舗情報の一覧化（閉店時間も表示）
       st.markdown(f"### 📋 {target_area} 周辺のほかの店舗状況")
       for item in all_results:
         c = item["cafe"]
@@ -285,7 +271,7 @@ if st.button("🚀 今すぐベストな店を見る", type="primary", use_conta
           status_icon = "🔴 混雑中"
 
         with st.expander(
-            f"{status_icon} ｜ {c['name']} （閉店: {c_hour:=c['close_hour']}時）"
+            f"{status_icon} ｜ {c['name']} （閉店: {c['close_hour']}時）"
         ):
           st.write(f"- 駅から徒歩: **{c['walk_min']}分**")
           st.write(f"- 特徴: `{c['type']}`")
