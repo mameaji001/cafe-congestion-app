@@ -7,16 +7,15 @@ from streamlit_js_eval import get_geolocation
 # ページ設定
 st.set_page_config(page_title="未来予測＆目的別 カフェ混雑ナビ", page_icon="☕", layout="wide")
 
-st.title("☕ 未来予測 ＆ 目的別 カフェ混雑・穴場ナビ")
-st.caption("「いつ・どこで・何のために」カフェを探すかに合わせて、混雑度と最適な店舗を予測・判定します。")
+st.title("☕ 未来予測 ＆ 目的別 カフェ穴場ナビ")
+st.caption("Googleマップでは分からない「目的 × 天候 × 未来の状況」から最適な穴場を判定！")
 
 st.divider()
 
-# 日本時間（JST）の定義
 JST = timezone(timedelta(hours=9), 'JST')
 
 # ==========================================
-# 1. 「いつ・どこで」モード選択（現在 vs 未来）
+# 1. モード選択
 # ==========================================
 st.sidebar.header("⚙️ 条件・検索設定")
 mode = st.sidebar.radio("📍 検索モードを選択", ["今すぐ探す（現在地GPS）", "未来・指定場所で探す"])
@@ -31,21 +30,21 @@ if mode == "今すぐ探す（現在地GPS）":
         lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
         st.sidebar.success(f"GPS取得: 緯度{lat:.4f} / 経度{lon:.4f}")
     else:
-        lat, lon = 35.6812, 139.7671  # デフォルト（東京駅）
+        lat, lon = 35.6812, 139.7671
         st.sidebar.info("現在地未取得のため「東京駅」として計算中")
     
     target_location = "現在地周辺"
-    target_datetime = datetime.now(JST) # 日本時間に修正
+    target_datetime = datetime.now(JST)
 
-else:  # 未来・指定場所で探す
+else:
     target_location = st.sidebar.text_input("検索エリア・駅名を入力", value="渋谷駅")
     selected_date = st.sidebar.date_input("日付を選択", date.today())
     selected_time = st.sidebar.time_input("時間を選択", time(15, 0))
     target_datetime = datetime.combine(selected_date, selected_time).replace(tzinfo=JST)
-    lat, lon = 35.6580, 139.7016  # 例: 渋谷周辺座標
+    lat, lon = 35.6580, 139.7016
 
 # ==========================================
-# 2. 用途（目的）の選択
+# 2. 用途（目的）選択
 # ==========================================
 st.sidebar.subheader("🎯 カフェ利用の目的（複数選択可）")
 use_pc = st.sidebar.checkbox("💻 PC作業・仕事（コンセント・Wi-Fi重視）")
@@ -54,40 +53,38 @@ use_read = st.sidebar.checkbox("📖 読書・勉強（静かさ・落ち着き�
 use_quick = st.sidebar.checkbox("⚡️ スキマ時間のサクッと休憩（回転率・手軽さ重視）")
 
 # ==========================================
-# 3. 日時・天気・環境スコアの計算
+# 3. スコア計算
 # ==========================================
 weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
 weekday_str = weekday_names[target_datetime.weekday()]
 hour = target_datetime.hour
 is_weekend = target_datetime.weekday() >= 5
 
-# 時間帯スコア
 time_score = 0
 if is_weekend:
     if 13 <= hour <= 17:
         time_score = 35
-        time_msg = "休日ピークタイム（どこも混雑しやすい）"
+        time_msg = "休日ピークタイム（全体的に混雑）"
     elif 11 <= hour <= 12 or 18 <= hour <= 20:
         time_score = 20
         time_msg = "休日準ピークタイム"
     else:
         time_score = 5
-        time_msg = "休日の早朝/夜間（比較的空いています）"
+        time_msg = "休日の早朝/夜間（狙い目）"
 else:
     if 8 <= hour <= 9:
         time_score = 25
-        time_msg = "平日朝ラッシュ（駅チカ・大手チェーン混雑）"
+        time_msg = "平日朝ラッシュ（駅チカ混雑）"
     elif 12 <= hour <= 13:
         time_score = 30
-        time_msg = "平日ランチタイム（混雑）"
+        time_msg = "平日ランチタイム"
     elif 14 <= hour <= 17:
         time_score = 20
-        time_msg = "平日カフェタイム・打合せ利用"
+        time_msg = "平日カフェタイム"
     else:
         time_score = 0
-        time_msg = "平日のアイドルタイム（狙い目）"
+        time_msg = "平日のアイドルタイム（空きあり）"
 
-# 天気自動取得
 is_rain = False
 weather_label = "晴れ/曇り ☀️"
 if mode == "今すぐ探す（現在地GPS）":
@@ -104,70 +101,71 @@ else:
 
 is_event = st.sidebar.checkbox("🎪 周辺で大規模イベント開催中", value=False)
 
-# メインパネルのステータス表示
+# ステータス表示
 c1, c2, c3 = st.columns(3)
 c1.metric("対象エリア", target_location)
 c2.metric("対象日時", f"{target_datetime.strftime('%m/%d')}({weekday_str}) {target_datetime.strftime('%H:%M')}")
 c3.metric("予想天候", weather_label if mode == "今すぐ探す（現在地GPS）" else ("雨 🌧️" if is_rain else "晴れ ☀️"))
 
-st.caption(f"💡 **時間帯の背景:** {time_msg}")
+st.caption(f"💡 **時間帯の傾向:** {time_msg}")
 st.divider()
 
 # ==========================================
-# 4. 周辺カフェリスト ＆ 目的マッチング＆混雑判定
+# 4. カフェ判定 ＆ Googleマップ差別化アドバイス
 # ==========================================
-st.header("🏪 周辺カフェの混雑予想 ＆ 目的適性判定")
+st.header("🏪 カフェ穴場判定 ＆ 立ち回りナビ")
 
-# 店舗モデルデータ（営業時間・雰囲気情報付き）
 cafes = [
     {
         "name": "スターバックス（駅ビル直結店）",
         "type": "大手チェーン / 駅直結",
         "dist": "徒歩1分",
-        "open_hour": 7, "close_hour": 22, # 営業時間: 07:00〜22:00
+        "open_hour": 7, "close_hour": 22,
         "atmosphere": "賑やか・学生〜ビジネス層",
         "is_station": True, "is_far": False,
         "features": {"pc": True, "chat": True, "read": False, "quick": True},
-        "turnover_penalty": 10
+        "turnover_penalty": 10,
+        "advice": "駅直結でアクセス抜群ですが、雨天や休日は長蛇の列になりがち。テイクアウト以外の着席利用は非推奨です。"
     },
     {
         "name": "ドトールコーヒーショップ（駅前）",
         "type": "セルフカフェ / カウンター多め",
         "dist": "徒歩2分",
-        "open_hour": 6, "close_hour": 21, # 営業時間: 06:00〜21:00
+        "open_hour": 6, "close_hour": 21,
         "atmosphere": "サクッと利用・会社員多め",
         "is_station": False, "is_far": False,
         "features": {"pc": False, "chat": True, "read": False, "quick": True},
-        "turnover_penalty": -10
+        "turnover_penalty": -10,
+        "advice": "回転率が非常に高いため、一見満席に見えても5分ほど待てば席が空く確率が高い穴場です。"
     },
     {
         "name": "コメダ珈琲店（大通り沿い店）",
         "type": "ボックス席メイン / 滞在型",
         "dist": "徒歩5分",
-        "open_hour": 7, "close_hour": 23, # 営業時間: 07:00〜23:00
+        "open_hour": 7, "close_hour": 23,
         "atmosphere": "落ち着いたボックス席・ファミリー・シニア層",
         "is_station": False, "is_far": False,
         "features": {"pc": True, "chat": True, "read": True, "quick": False},
-        "turnover_penalty": 20
+        "turnover_penalty": 20,
+        "advice": "席の間隔が広くPC作業や長話に最適ですが、滞在時間が長いため一度満席になると回転しません。事前予約か発券機確認を推奨。"
     },
     {
         "name": "隠れ家ロースターカフェ（2階）",
         "type": "個人経営 / 静かな空間",
         "dist": "徒歩8分",
-        "open_hour": 11, "close_hour": 19, # 営業時間: 11:00〜19:00
+        "open_hour": 11, "close_hour": 19,
         "atmosphere": "静か・大人の隠れ家・おひとり様多め",
         "is_station": False, "is_far": True,
         "features": {"pc": False, "chat": False, "read": True, "quick": False},
-        "turnover_penalty": 15
+        "turnover_penalty": 15,
+        "advice": "駅から少し歩くため、雨の日やピーク時でも混雑を回避しやすい最強の穴場です。静かに読書・一人時間を過ごしたい時に◎"
     }
 ]
 
 for cafe in cafes:
-    # 営業時間チェック判定
     current_target_hour = target_datetime.hour
     is_open = cafe["open_hour"] <= current_target_hour < cafe["close_hour"]
 
-    # --- A. 混雑スコア計算 ---
     score = 15 + time_score
     if is_rain:
         if cafe["is_station"]: score += 30
@@ -179,7 +177,6 @@ for cafe in cafes:
     if is_event: score += 25
     final_score = max(10, min(99, score))
 
-    # --- B. 目的マッチング判定 ---
     match_reasons = []
     unmatch_reasons = []
     
@@ -196,27 +193,21 @@ for cafe in cafes:
         if cafe["features"]["quick"]: match_reasons.append("回転が早くサクッと入れる")
         else: unmatch_reasons.append("長居客が多く席確保に時間要す")
 
-    # --- C. 表示作成 ---
     with st.container(border=True):
         col_main, col_match, col_status = st.columns([2, 1.5, 1])
 
         with col_main:
             st.markdown(f"### ☕ {cafe['name']}")
             st.write(f"特徴: **{cafe['type']}** ／ 距離: **{cafe['dist']}**")
-            st.caption(f"🕒 営業時間: {cafe['open_hour']}:00 〜 {cafe['close_hour']}:00 ／ 👥 雰囲気: {cafe['atmosphere']}")
+            st.caption(f"🕒 {cafe['open_hour']}:00〜{cafe['close_hour']}:00 ／ 👥 {cafe['atmosphere']}")
             
-            # 理由解説
-            reasons = []
-            if is_rain and cafe["is_station"]: reasons.append("🌧️ 雨で駅直結に集中")
-            elif is_rain and cafe["is_far"]: reasons.append("🌧️ 雨のため徒歩移動店舗は空き気味")
-            if is_weekend and 13 <= hour <= 17: reasons.append("休日ピーク帯")
-            if reasons:
-                st.caption("【混雑理由】 " + " / ".join(reasons))
+            # Googleマップとの差別化ポイント：立ち回りアドバイス
+            st.info(f"💡 **立ち回りアドバイス:** {cafe['advice']}")
 
         with col_match:
-            st.markdown("**【あなたの目的との相性】**")
+            st.markdown("**【目的マッチ度】**")
             if not (use_pc or use_chat or use_read or use_quick):
-                st.caption("👈 サイドバーで目的を選ぶと判定されます")
+                st.caption("👈 サイドバーで目的を選択してください")
             else:
                 for m in match_reasons:
                     st.write(f"✅ {m}")
@@ -231,11 +222,30 @@ for cafe in cafes:
             elif final_score >= 40:
                 st.warning(f"混雑度: **{final_score}%**\n\n⚠️ タイミング次第")
             else:
-                st.success(f"混雑度: **{final_score}%**\n\n✨ 空いてる狙い目！")
+                st.success(f"混雑度: **{final_score}%**\n\n✨ 空いてる穴場！")
 
 st.divider()
 
-# マップ表示
-st.header("🗺️ 周辺エリアマップ")
+# ==========================================
+# 5. スマホ最適化マップ表示
+# ==========================================
+st.header("🗺️ 周辺マップ")
+
+# スマホ画面でもはみ出さないスリムな地図表示の設定
 df_map = pd.DataFrame({'lat': [lat], 'lon': [lon]})
-st.map(df_map, zoom=14)
+
+# モバイル用スタイル調整（縦幅を小さめにしてスクロールしやすくする）
+st.components.v1.html(
+    f"""
+    <iframe 
+        width="100%" 
+        height="280" 
+        frameborder="0" 
+        scrolling="no" 
+        marginheight="0" 
+        marginwidth="0" 
+        src="https://maps.google.com/maps?q={lat},{lon}&z=15&output=embed">
+    </iframe>
+    """,
+    height=300
+)
