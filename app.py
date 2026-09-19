@@ -1,100 +1,92 @@
 import streamlit as st
 import pandas as pd
 import requests
+from streamlit_js_eval import get_geolocation
 
-# ページ基本設定
+# ページ設定
 st.set_page_config(page_title="カフェ混雑予想", page_icon="☕", layout="wide")
 
 st.title("☕ カフェ混雑シチュエーション予想")
-st.caption("今の状況や位置情報から、混雑確率とおすすめの立ち回りを自動判定します！")
+st.caption("現在地のリアルタイムGPS座標を取得して、混雑シミュレーションを行います！")
 
 st.divider()
 
-# タブ分けで直感的なUIに
-tab1, tab2 = st.tabs(["📡 自動推測（位置情報＆リアルタイム天気）", "⚙️ 手動でシチュエーション指定"])
+# --- GPS（位置情報）の取得 ---
+st.subheader("📍 現在地のGPS取得")
+st.write("「位置情報を取得」ボタンを押すと、ブラウザから現在地の正確な緯度・経度を取得します。")
 
-# デフォルト設定
-lat, lon = 35.6812, 139.7671 # 東京駅初期値
-weather_label = "晴れ/曇り"
+# JavaScript経由でGPS取得
+loc = get_geolocation()
+
+lat, lon = None, None
+
+if loc and 'coords' in loc:
+    lat = loc['coords']['latitude']
+    lon = loc['coords']['longitude']
+    st.success(f"✅ GPS取得成功！ 緯度: {lat:.6f} / 経度: {lon:.6f}")
+else:
+    st.info("💡 下のボタンまたはブラウザの許可ダイアログで位置情報の利用を「許可」してください。")
+
+# デフォルト（東京駅）フォールバック
+if lat is None or lon is None:
+    lat, lon = 35.6812, 139.7671
+    st.caption("※ 現在地未取得のため、初期値（東京駅周辺）でシミュレーションしています。")
+
+st.divider()
+
+# --- 天気自動取得 (Open-Meteo API) ---
+weather_label = "晴れ/曇り ☀️"
 weather_score = 0
+temp = "--"
 
-with tab1:
-    st.subheader("現在地から自動推測")
-    st.write("ボタンを押して現在地の天気と位置情報を取得します。")
+try:
+    weather_res = requests.get(
+        f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true"
+    ).json()
     
-    # 位置情報取得用HTML/JS
-    loc_html = """
-    <script>
-    function getLocation() {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(showPosition);
-        } else { 
-            alert("Geolocation is not supported by this browser.");
-        }
-    }
-    function showPosition(position) {
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-        window.parent.postMessage({type: 'streamlit:setComponentValue', value: {lat: lat, lon: lon}}, '*');
-    }
-    </script>
-    <button onclick="getLocation()" style="padding: 10px 20px; background-color: #ff4b4b; color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">
-        📍 現在地を取得して天気をチェック
-    </button>
-    """
+    current_w = weather_res.get("current_weather", {})
+    temp = current_w.get("temperature", "--")
+    weather_code = current_w.get("weathercode", 0)
     
-    # 簡易位置情報取得（IP・APIベース補完）
-    try:
-        # 無料の天気API (Open-Meteo)
-        weather_res = requests.get(f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current_weather=true").json()
-        temp = weather_res.get("current_weather", {}).get("temperature", "--")
-        weather_code = weather_res.get("current_weather", {}).get("weathercode", 0)
-        
-        # Weathercode 判定 (51以上は雨・雪系)
-        if weather_code >= 51:
-            weather_label = "雨・悪天候 🌧️"
-            weather_score = 25
-        else:
-            weather_label = "晴れ/曇り ☀️"
-            weather_score = 0
-            
-        col_w1, col_w2 = st.columns(2)
-        col_w1.metric(label="現在の推定天気", value=weather_label)
-        col_w2.metric(label="現在地の気温", value=f"{temp} ℃")
-    except Exception as e:
-        st.warning("天気の自動取得に失敗したため、手動設定を使用します。")
+    # 雨系コード判定
+    if weather_code >= 51:
+        weather_label = "雨・悪天候 🌧️"
+        weather_score = 25
+    else:
+        weather_label = "晴れ/曇り ☀️"
+        weather_score = 0
 
-with tab2:
-    st.subheader("条件を手動で細かく選ぶ")
-    c1, c2 = st.columns(2)
-    with c1:
-        manual_weather = st.radio("天候", ["晴れ・曇り", "雨・悪天候"])
-        manual_loc = st.radio("立地", ["駅直結・改札すぐ", "徒歩3〜5分圏内", "徒歩7分以上"])
-    with c2:
-        manual_time = st.selectbox("時間帯", ["平日・午前", "平日・カフェタイム（14-17時）", "土日祝・カフェタイム（14-17時）", "夜（18時以降）"])
-        manual_event = st.checkbox("近隣でイベント・祭りがある")
+except Exception:
+    st.warning("天気の自動取得に失敗しました。")
+
+# 条件・シチュエーション設定
+col_w1, col_w2 = st.columns(2)
+col_w1.metric(label="現在地の推測天気", value=weather_label)
+col_w2.metric(label="現在地の気温", value=f"{temp} ℃")
+
+st.subheader("⚙️ シチュエーション補正")
+c1, c2 = st.columns(2)
+with c1:
+    is_station_direct = st.checkbox("近くのカフェが「駅直結・改札すぐ」にある")
+    is_far = st.checkbox("駅から徒歩7分以上離れた店舗を狙う")
+with c2:
+    is_event = st.checkbox("周辺でイベント・祭りが開催されている")
 
 # --- 判定ロジック ---
 score = 20 + weather_score
 
-# 手動タブ選択時の補正
-if manual_weather == "雨・悪天候":
-    score += 25
-if manual_loc == "駅直結・改札すぐ":
+if is_station_direct:
     score += 30
-elif manual_loc == "徒歩7分以上":
-    score -= 15
-
-if "土日祝" in manual_time:
-    score += 25
-if manual_event:
+if is_far:
+    score -= 20
+if is_event:
     score += 30
 
 congestion = max(10, min(99, score))
 
 st.divider()
 
-# --- 結果表示 ---
+# --- 判定結果表示 ---
 st.header("📊 判定結果")
 
 m1, m2 = st.columns([1, 2])
@@ -113,27 +105,23 @@ with m1:
 with m2:
     st.write("💡 **おすすめの立ち回りアドバイス**")
     if congestion >= 70:
-        st.info("・駅直結や有名チェーンは避けるのが無難です。\n・駅から徒歩7分以上離れたビル上階のカフェやテイクアウト専門店が狙い目です！")
+        st.info("・駅直結や改札前の店舗は激混みです！\n・駅から徒歩7分以上離れた店舗や2階以上の隠れ家カフェを狙いましょう。")
     elif congestion >= 40:
-        st.info("・席数の多い店舗（ドトール等）や、2階以上に席がある店舗を探すと入りやすいです。")
+        st.info("・席数の多い広めの店舗や、テイクアウト専門スタンドを選ぶとスムーズに入れます。")
     else:
-        st.info("・ゆっくり過ごせるチャンス！ゆったり座れるソファ席や作業向きカフェを狙ってみましょう。")
+        st.info("・混雑のリスクは低めです。ゆったり座れるお好みのカフェをお楽しみください！")
 
 st.progress(congestion / 100)
 
 st.divider()
 
-# --- 地図表示（マップ） ---
-st.header("🗺️ 周辺カフェの混雑傾向マップ")
-st.caption("赤：混雑リスク高 / 緑：穴場リスク低")
+# --- 現在地を中心にしたマップ表示 ---
+st.header("🗺️ 取得したGPS中心の地図")
+st.caption("ピンは実際の現在地周辺を示しています")
 
-# 現在地周辺のサンプルデータ生成
-map_data = pd.DataFrame({
-    'lat': [lat + 0.002, lat - 0.003, lat + 0.001, lat - 0.001],
-    'lon': [lon + 0.002, lon - 0.001, lon - 0.003, lon + 0.003],
-    'name': ['駅前チェーンカフェ', '路地裏隠れ家カフェ', 'ビル2Fテラスカフェ', 'テイクアウト専門店']
+df_map = pd.DataFrame({
+    'lat': [lat],
+    'lon': [lon]
 })
 
-st.map(map_data)
-
-st.caption("【スポンサーリンク】📢 ここにGoogle AdMobなどの広告バナーが配置されます")
+st.map(df_map, zoom=15)
