@@ -210,8 +210,8 @@ st.header("🗺️ 周辺マップ（Google Maps API連携）")
 
 google_api_key = "AIzaSyAN1EEVcNTgNI_Dxu8WBc7XVBTUBOHzVwY"
 
-st.components.v1.html(
-    f"""
+# Pythonのf-stringとJSの波括弧が衝突しないよう変数を外で埋め込み
+map_html = f"""
     <div id="map" style="width:100%; height:300px;"></div>
     <script>
       function initMap() {{
@@ -230,6 +230,6 @@ st.components.v1.html(
     <script async defer
       src="https://maps.googleapis.com/maps/api/js?key={google_api_key}&callback=initMap">
     </script>
-    """,
-    height=320
-)
+"""
+
+st.components.v1.html(map_html, height=320)
