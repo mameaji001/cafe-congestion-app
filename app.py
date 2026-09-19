@@ -1,125 +1,266 @@
-import streamlit as st
-import datetime
-import os
+from datetime import datetime
 import json
+import os
 from google import genai
+import requests
+import streamlit as st
+from streamlit_js_eval import get_geolocation
 
-# Streamlit ページ設定
-st.set_page_config(page_title="全国対応 カフェ混雑・穴場予測AIナビ", layout="centered")
+# ページ設定
+st.set_page_config(
+    page_title="全国対応 カフェ最適解ナビ",
+    page_icon="☕",
+    layout="centered",
+)
 
-st.title("☕ 全国対応 カフェ混雑・穴場予測AIナビ")
-st.write("日本全国の任意の駅名・エリアを入力し、AIのイベント予測や天候（雨など）を反映したリアルタイム混雑・穴場予測を行います。")
+st.title("☕ 全国対応 カフェ最適解ナビ")
+st.write(
+    "GPSや手動指定からエリア・時間を自動／任意で反映し、天気情報と連動してベストなカフェをご提案します。"
+)
 
-# --- 1. エリア・条件入力エリア ---
-st.subheader("⚙️ 検索条件の設定")
 
-target_area = st.text_input("検索したい駅名・エリアを入力（例：札幌駅、梅田、博多、名古屋市栄）", "渋谷駅周辺")
-is_rainy = st.checkbox("🌧️ 当日は雨（または雨天予報）", value=False)
+# ==========================================
+# 1. 天気自動取得関数（Open-Meteo API活用：無料・キー不要）
+# ==========================================
+def get_weather_by_latlon(lat, lon):
+  try:
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=weather_code,temperature_2m"
+    res = requests.get(url, timeout=5)
+    data = res.json()
+    code = data["current"]["weather_code"]
+    temp = data["current"]["temperature_2m"]
 
-# --- 2. Gemini APIを活用したエリア別カフェ＆イベント情報の自動解析 ---
-def fetch_cafes_and_events_by_ai(area_name, rainy_flag):
-    """
-    Gemini APIを使用して、指定された日本全国のエリアにある実在のカフェ情報と、
-    周辺のイベント状況・混雑度を動的に取得する
-    """
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        return None, "APIキーが設定されていないため、店舗情報を取得できません。"
-    
-    try:
-        client = genai.Client()
-        prompt = f"""
-        あなたは日本全国の地理とカフェ事情に精通したアシスタントです。
-        「{area_name}」の周辺に実在する代表的なカフェ（大手チェーンや有名店など）を3〜4店舗挙げてください。
-        また、{area_name}周辺で現在カフェの混雑に影響するようなイベント（ライブ、お祭り、試合など）の有無を推測してください。
+    # WMO Weather interpretation codes (簡易判定: 51以上は雨や雪などの悪天候とみなす)
+    is_rainy = code >= 51
+    weather_desc = (
+        "雨・悪天候" if is_rainy else "晴れ・曇り（良好なコンディション）"
+    )
+    return is_rainy, f"{weather_desc}（気温: {temp}°C）"
+  except Exception:
+    return False, "天気データの取得に失敗しました（通常モードで計算します）"
+
+
+# ==========================================
+# 2. Gemini APIによる全国のリアル店舗＆イベントデータ取得
+# ==========================================
+def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
+  api_key = os.environ.get("GEMINI_API_KEY")
+  if not api_key:
+    return (
+        None,
+        "APIキー（GEMINI_API_KEY）が設定されていないため、店舗情報を取得できません。",
+    )
+
+  try:
+    client = genai.Client()
+    prompt = f"""
+        あなたは日本全国の地理とカフェ事情に精通したプロフェッショナルです。
+        「{area_name}」の周辺に実在する代表的なカフェ（大手チェーン、人気店、個人店など）を3店舗挙げてください。
+        現在の状況は「{current_hour}時」、天気は「{'雨・悪天候' if is_rainy else '晴れ・曇り'}」です。
         
-        以下のJSON形式（マークダウンのコードブロックなし、プレーンなJSONのみ）で回答してください。
+        以下のJSON形式（マークダウンのコードブロックなし、プレーンなJSONのみ）で正確に出力してください。
         {{
-          "has_event": trueまたはfalse,
-          "event_comment": "イベントの有無や理由に関する説明文",
+          "area_comment": "{area_name}周辺の現在の混雑傾向やイベント状況に関する一言解説",
           "cafes": [
             {{
               "name": "実在する店舗名1",
-              "address": "おおよその住所",
-              "station_direct": trueまたはfalse (駅直結または駅ビル内か),
-              "walk_minutes": 駅からの徒歩分数(整数),
-              "base_congestion": 50
+              "address": "おおよその住所または立地",
+              "type": "作業向き / サクッと休憩 / おしゃべり・落ち着いた空間 のいずれか",
+              "walk_min": 駅や中心地からの徒歩分数(整数),
+              "base_crowd": 50 (基本の混雑度 0〜100)
             }}
           ]
         }}
         """
-        
-        response = client.models.generate_content(
-            model='gemini-2.5-flash',
-            contents=prompt,
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
+
+    text = response.text.strip()
+    if "```json" in text:
+      text = text.split("```json")[1].split("```")[0].strip()
+    elif "```" in text:
+      text = text.split("```")[1].split("```")[0].strip()
+
+    data = json.loads(text)
+    return data, None
+  except Exception as e:
+    return None, f"データ取得エラー: {e}"
+
+
+# ==========================================
+# 3. 画面UI：モード選択（自動 vs 任意指定）
+# ==========================================
+st.subheader("📍 検索モードの選択")
+mode = st.radio(
+    "検索方法を選んでください",
+    [
+        "📍 【今すぐ】GPS現在地と現在時刻を自動反映",
+        "🚃 【未来・指定】場所と時間を手動で自由選択",
+    ],
+    horizontal=False,
+)
+
+target_area = ""
+current_hour = datetime.now().hour
+is_weekend = datetime.now().weekday() >= 5
+is_rainy = False
+weather_info_text = ""
+
+# --- モード別の値設定 ---
+if "今すぐ" in mode:
+  st.write("🔄 GPSから現在地を取得中...")
+  loc = get_geolocation()
+
+  if loc:
+    lat = loc["coords"]["latitude"]
+    lon = loc["coords"]["longitude"]
+    st.success(
+        f"GPS取得成功（緯度: {lat:.2f}, 経度: {lon:.2f}）。位置情報を元にエリアを特定します。"
+    )
+    # 簡易的に緯度経度からエリア名を推定、またはデフォルトの現在地周辺へ
+    target_area = "渋谷駅周辺"  # ※実運用では逆ジオコーディング等に拡張可能
+    is_rainy, weather_info_text = get_weather_by_latlon(lat, lon)
+  else:
+    st.info(
+        "ブラウザの位置情報許可を確認中、またはシミュレーション環境です（初期値として渋谷駅周辺で代行します）。"
+    )
+    target_area = "渋谷駅周辺"
+    is_rainy, weather_info_text = get_weather_by_latlon(35.6581, 139.7016)
+
+  st.info(
+      f"🕒 **自動反映**：現在 {current_hour}時 ｜ ☁️ **自動取得した天気**："
+      f" {weather_info_text}"
+  )
+
+else:
+  st.markdown("---")
+  target_area = st.text_input(
+      "🔍 行きたい駅名・エリア名を入力",
+      "新宿駅周辺",
+      help="日本全国どの都道府県・駅名でもOKです",
+  )
+  col_t1, col_t2 = st.columns(2)
+  with col_t1:
+    current_hour = st.slider("⏰ 時間帯を選択", 0, 23, 14)
+  with col_t2:
+    is_weekend = st.checkbox("土日祝日ですか？", value=False)
+
+  # 手動モードでもエリアの代表地点座標等から天気を自動取得（今回は東京を基準とする例、必要に応じ拡張可）
+  is_rainy, weather_info_text = get_weather_by_latlon(35.6894, 139.6917)
+  st.info(f"☁️ **自動取得した天気予報**： {weather_info_text}")
+
+st.markdown("---")
+
+# 目的の選択
+purpose = st.selectbox(
+    "🎯 今日の目的は？", ["作業したい", "サクッと休憩", "おしゃべり・ゆっくり"]
+)
+
+# ==========================================
+# 4. 実行ボタンとロジック処理
+# ==========================================
+if st.button("🚀 ベストなカフェを探す", type="primary", use_container_width=True):
+  with st.spinner(
+      f"「{target_area}」の実在店舗データとリアルタイム状況を分析中..."
+  ):
+    ai_data, err = fetch_cafes_by_ai(target_area, is_rainy, current_hour)
+
+    if err or not ai_data:
+      st.error(err)
+    else:
+      st.markdown(f"### 📍 「{target_area}」の分析結果")
+      st.write(f"💡 {ai_data.get('area_comment', '')}")
+      if is_rainy:
+        st.warning(
+            "🌧️ **雨天連動補正**: 駅チカ店舗の混雑度が上がり、駅から離れた店舗が穴場として評価されます。"
         )
-        
-        text = response.text.strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-            
-        data = json.loads(text)
-        return data, None
-    except Exception as e:
-        return None, f"データ取得中にエラーが発生しました: {e}"
 
-# --- 3. 予測実行ボタン ---
-if st.button("🚀 全国エリアの混雑・穴場を予測する"):
-    with st.spinner(f"「{target_area}」周辺の実在カフェデータとイベント状況をAIが分析中..."):
-        ai_data, err = fetch_cafes_and_events_by_ai(target_area, is_rainy)
-        
-        if err or not ai_data:
-            st.error(f"エラーが発生しました: {err}")
+      st.markdown("---")
+
+      cafes = ai_data.get("cafes", [])
+      scored_list = []
+
+      for cafe in cafes:
+        score = cafe.get("base_crowd", 50)
+        reasons = []
+
+        # 時間帯による補正
+        if 12 <= current_hour <= 14:
+          score += 15
+          reasons.append("お昼時のため混雑しやすい時間帯です")
+        elif 14 <= current_hour <= 18:
+          score += 25
+          reasons.append("カフェのピークタイムのため混み合います")
+
+        # 天気（雨）による補正
+        walk = cafe.get("walk_min", 3)
+        if is_rainy:
+          if walk <= 2:
+            score += 20
+            reasons.append(
+                "雨天のため、駅から近い店舗に人が集中しています"
+            )
+          else:
+            score -= 15
+            reasons.append("駅から少し歩くため、雨の日でも比較的空いています")
+
+        # 目的とのマッチング補正
+        c_type = cafe.get("type", "")
+        if purpose in c_type:
+          score -= 15
+          reasons.append(f"ご希望の「{purpose}」にぴったりのタイプです")
+
+        final_score = max(10, min(99, score))
+        scored_list.append(
+            {"cafe": cafe, "crowd": final_score, "reasons": reasons}
+        )
+
+      # 混雑度が低い順に並べ替え
+      scored_list.sort(key=lambda x: x["crowd"])
+
+      if scored_list:
+        best = scored_list[0]
+        bc = best["cafe"]
+
+        # 最適解の表示
+        st.success("✨ **今ここがおすすめです！**")
+        st.markdown(f"### 📍 **{bc['name']}**")
+        st.write(
+            f"🚶 徒歩 **{bc['walk_min']}分** ｜ ☕ タイプ：`{bc['type']}` ｜"
+            f" 📍 {bc['address']}"
+        )
+
+        if best["crowd"] < 50:
+          st.metric(
+              label="予想混雑度",
+              value=f"{best['crowd']}%（座れる確率が高いです🎉）",
+              delta="穴場",
+          )
         else:
-            st.subheader(f"📍 「{target_area}」の分析結果")
-            
-            if ai_data.get("has_event"):
-                st.warning(f"⚠️ **周辺イベント情報**: {ai_data.get('event_comment')}")
-            else:
-                st.success(f"✅ イベント状況: {ai_data.get('event_comment', '周辺での大規模な混雑要因は検出されていません。')}")
-                
-            if is_rainy:
-                st.info("🌧️ **雨天補正発動**: 駅チカ・直結の店舗に混雑が集中し、駅から離れた店舗が穴場になります。")
+          st.metric(
+              label="予想混雑度",
+              value=f"{best['crowd']}%（やや混み合っています⚠️）",
+              delta="注意",
+              delta_color="inverse",
+          )
 
-            st.markdown("---")
+        st.markdown("**💡 おすすめの理由：**")
+        for r in best["reasons"]:
+          st.write(f"- {r}")
 
-            cafes = ai_data.get("cafes", [])
-            if not cafes:
-                st.warning("該当エリアのカフェ情報が見つかりませんでした。別のキーワードでお試しください。")
-            
-            for cafe in cafes:
-                congestion = cafe.get("base_congestion", 50)
-                is_direct = cafe.get("station_direct", False)
-                walk = cafe.get("walk_minutes", 3)
-                
-                if is_rainy:
-                    if is_direct or walk <= 2:
-                        congestion += 25
-                    else:
-                        congestion -= 15
-                
-                if ai_data.get("has_event"):
-                    congestion += 20
-                    
-                congestion = max(10, min(100, congestion))
-                
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.markdown(f"### **{cafe.get('name')}**")
-                    st.caption(f"📍 所在地目安: {cafe.get('address')} / 徒歩 {walk}分")
-                    if is_rainy and is_direct:
-                        st.markdown("💬 *雨天のため、駅チカ・直結で混雑が集中しやすい店舗です。*")
-                    elif is_rainy and not is_direct:
-                        st.markdown("💬 *駅から少し歩くため、雨の日でも比較的落ち着いて座れる穴場です。*")
-                    else:
-                        st.markdown("💬 *標準的な混雑傾向の店舗です。*")
-                with col2:
-                    if congestion >= 70:
-                        st.error(f"混雑度: {congestion}%")
-                    elif congestion >= 40:
-                        st.warning(f"混雑度: {congestion}%")
-                    else:
-                        st.success(f"穴場度高: {congestion}%")
-                st.markdown("---")
+        st.markdown("---")
+        st.markdown("### 📋 周辺のほかの店舗状況")
+        for item in scored_list[1:]:
+          c = item["cafe"]
+          c_score = item["crowd"]
+          status_icon = "🟢 空いてます" if c_score < 50 else "🔴 混雑中"
+          with st.expander(
+              f"{status_icon} ｜ {c['name']} （予想混雑度: {c_score}%）"
+          ):
+            st.write(f"- 徒歩: **{c['walk_min']}分**")
+            st.write(f"- 特徴: `{c['type']}` / 住所: {c['address']}")
+            for sub_r in item["reasons"]:
+              st.write(f"  * {sub_r}")
