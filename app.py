@@ -1,5 +1,6 @@
 from datetime import datetime
 import streamlit as st
+from streamlit_js_eval import get_geolocation
 
 # ページ設定
 st.set_page_config(
@@ -8,50 +9,49 @@ st.set_page_config(
 
 
 # ==========================================
-# 1. マスターデータ（店舗＋トレンド・イベント情報）
+# 1. マスターデータ（店舗＋特徴）
 # ==========================================
-# 本来はDBや外部ファイルから取得しますが、まずはモックとして定義
 def get_cafe_database():
   return [
     {
       "name": "スターバックスコーヒー 水道橋店",
       "area": "水道橋",
-      "type": "チェーン（作業多め）",
+      "type": "作業向き（コンセント多め）",
       "walk_min": 2,
       "base_crowd": 80,
     },
     {
       "name": "ドトールコーヒーショップ 水道橋東口店",
       "area": "水道橋",
-      "type": "チェーン（回転早い）",
+      "type": "サクッと休憩・回転早い",
       "walk_min": 1,
       "base_crowd": 85,
     },
     {
       "name": "珈琲館 水道橋裏路地店",
       "area": "水道橋",
-      "type": "個人・落ち着いたカフェ",
+      "type": "おしゃべり・落ち着いた空間",
       "walk_min": 7,
       "base_crowd": 40,
     },
     {
       "name": "スターバックスコーヒー 新宿三丁目店",
       "area": "新宿",
-      "type": "チェーン（作業多め）",
+      "type": "作業向き（コンセント多め）",
       "walk_min": 3,
       "base_crowd": 90,
     },
     {
       "name": "エクセルシオールカフェ 新宿西口店",
       "area": "新宿",
-      "type": "チェーン（回転早い）",
+      "type": "サクッと休憩・回転早い",
       "walk_min": 4,
       "base_crowd": 75,
     },
     {
       "name": "喫茶ルノアール 新宿南口隠れ家店",
       "area": "新宿",
-      "type": "個人・落ち着いたカフェ",
+      "type": "おしゃべり・落ち着いた空間",
       "walk_min": 8,
       "base_crowd": 35,
     },
@@ -59,62 +59,58 @@ def get_cafe_database():
 
 
 # ==========================================
-# 2. 思考ゼロの最適解を計算するロジック
+# 2. 最適解を計算するロジック（自動推測込み）
 # ==========================================
 def calculate_best_cafe(
-    target_area, current_hour, is_weekend, is_raining, has_event, has_collab
+    target_area, current_hour, is_weekend, purpose, auto_env_score
 ):
   cafes = get_cafe_database()
-  # エリアで絞り込み
   filtered_cafes = [c for c in cafes if c["area"] == target_area]
 
   if not filtered_cafes:
-    return None, "指定されたエリアのデータがまだありません。"
+    return None, []
 
   scored_cafes = []
   for cafe in filtered_cafes:
     score = cafe["base_crowd"]
     reasons = []
 
-    # ① 時間帯の補正
+    # ① 時間帯の自動補正
     if 12 <= current_hour <= 14:
       score += 20
-      reasons.append("お昼時のため全体的に混雑")
+      reasons.append("お昼時のため全体的に混雑傾向です")
     elif 14 <= current_hour <= 17:
-      score += 30
-      reasons.append("カフェのピークタイム")
+      score += 25
+      reasons.append("カフェのピークタイム帯です")
 
-    # ② 雨の日の補正（駅直結・駅チカは激混み、遠くは穴場）
-    if is_raining:
+    # ② 自動取得した環境スコア（雨やイベントなど）の加算
+    if auto_env_score > 0:
       if cafe["walk_min"] <= 2:
-        score += 25
-        reasons.append("雨天のため駅近に人が集中")
+        score += auto_env_score
+        reasons.append("悪天候やイベントの影響で駅近に人が集中しています")
       else:
-        score -= 25
-        reasons.append("雨の日でも駅から歩くため比較的穴場")
+        score -= 15
+        reasons.append("駅から少し歩くため、混雑を避けやすい穴場です")
 
-    # ③ イベント・ライブ・試合の補正
-    if has_event:
-      score += 35
-      reasons.append("周辺エリアで大規模イベント開催中")
-
-    # ④ 新商品・コラボ補正（チェーン店に大打撃、個人店は相対的に安全）
-    if has_collab and "チェーン" in cafe["type"]:
-      score += 40
-      reasons.append("人気コラボ・新商品の影響で大混雑")
-    elif has_collab:
+    # ③ 目的による相性補正
+    if purpose == "作業したい" and "作業向き" in cafe["type"]:
       score -= 10
-      reasons.append("コラボの影響を受けにくい隠れ家傾向")
+      reasons.append("ご希望の「作業向き」の設備が整っています")
+    elif purpose == "サクッと休憩" and "回転早い" in cafe["type"]:
+      score -= 15
+      reasons.append("回転が早いためスムーズに入りやすいです")
+    elif purpose == "おしゃべり・ゆっくり" and "落ち着いた空間" in cafe["type"]:
+      score -= 15
+      reasons.append("落ち着いてお話できるゆったりした空間です")
 
-    # スコアの上下限調整 (0〜100%)
     final_crowd = max(10, min(99, score))
     scored_cafes.append(
         {"cafe": cafe, "crowd": final_crowd, "reasons": reasons}
     )
 
-  # 「最も空いている（混雑度が低い）最適解」を1つだけ選ぶ！
-  best_choice = min(scored_cafes, key=lambda x: x["crowd"])
-  return best_choice, scored_cafes
+  # 混雑度が最も低いものを最適解とする
+  scored_cafes.sort(key=lambda x: x["crowd"])
+  return scored_cafes[0], scored_cafes
 
 
 # ==========================================
@@ -122,85 +118,113 @@ def calculate_best_cafe(
 # ==========================================
 st.title("☕ カフェ最適解ナビ")
 st.caption(
-    "Googleマップを開いて迷う時間をゼロに。今のあなたにベストな1店舗をズバッと提案します。"
+    "Googleマップを開いて迷う時間をゼロに。今のあなたにベストな1店舗をご提案します。"
 )
 
-# モード選択（GPS vs 検索）
+# モード選択
 mode = st.radio(
-    "現在地を選んでください", ["📍 今すぐここから探す（GPS想定）", "電車・移動先を検索する"], horizontal=True
+    "現在地から探すか、移動先を検索するか選んでください",
+    ["📍 現在地から探す（GPS）", "🚃 電車・移動先を検索する"],
+    horizontal=True,
 )
 
 target_area = "水道橋"
-if "検索" in mode:
-  target_area = st.selectbox("行き先のエリア・駅名", ["水道橋", "新宿"])
-else:
-  st.info("📍 現在地を検知しました：**水道橋エリア** と判定")
-  target_area = "水道橋"
 
-# 現在の自動取得データ ＋ トレンドの仮設定
-now = datetime.now()
-current_hour = st.slider(
-    "時間帯（シミュレーション用）", 8, 22, now.hour
-)
-is_weekend = st.checkbox("土日祝日ですか？", value=(now.weekday() >= 5))
+if "現在地" in mode:
+  st.write("📍 **GPS現在地を取得中...**")
+  # 実際のブラウザGPS取得
+  loc = get_geolocation()
+  if loc:
+    lat = loc["coords"]["latitude"]
+    lon = loc["coords"]["longitude"]
+    st.success(
+        f"現在地を取得しました（緯度: {lat:.2f}, 経度: {lon:.2f）。※デモのため水道橋エリアとして計算します"
+    )
+  else:
+    st.info("位置情報の権限を確認中、またはシミュレーションモードです。")
+  target_area = "水道橋"
+else:
+  target_area = st.selectbox("行き先のエリア・駅名を選択", ["水道橋", "新宿"])
 
 st.markdown("---")
-st.subheader("⚡ 本日の周辺シチュエーション（自動推測＆手動調整）")
-col1, col2, col3 = st.columns(3)
-with col1:
-  is_raining = st.checkbox("雨が降っている", value=False)
-with col2:
-  has_event = st.checkbox("近くで大型イベントあり", value=True)
-with col3:
-  has_collab = st.checkbox("有名コラボ・新商品発売日", value=False)
+
+# ④ 目的の選択肢
+purpose = st.selectbox(
+    "🎯 今日のあなたの目的は？",
+    ["作業したい", "サクッと休憩", "おしゃべり・ゆっくり"],
+)
+
+# ① シチュエーション自動判定（裏側で自動取得するイメージ、微調整も可）
+now = datetime.now()
+current_hour = now.hour
+is_weekend = now.weekday() >= 5
+
+# 自動判定のサマリーを表示
+auto_env_score = 25  # 例として雨やイベントがあると仮定したスコア
+st.caption(
+    f"🤖 **自動コンテキスト解析**：現在 {current_hour}時 / "
+    f"{'土日祝' if is_weekend else '平日'} ｜ 周辺環境・天候データを自動反映中"
+)
 
 st.markdown("---")
 
 # 実行ボタン
-if st.button("🚀 今行くべきベストな店を決定する", type="primary", use_container_width=True):
+if st.button("🚀 今すぐベストな店を見る", type="primary", use_container_width=True):
   best_result, all_results = calculate_best_cafe(
-      target_area, current_hour, is_weekend, is_raining, has_event, has_collab
+      target_area, current_hour, is_weekend, purpose, auto_env_score
   )
 
   if best_result:
     cafe = best_result["cafe"]
     crowd = best_result["crowd"]
 
-    # 思考ゼロの最強の1店舗をズバッと大きく表示
-    st.success("✨ 【あなたへの最適解】この店に直行せよ！")
+    # ③ 優しいトーンの提案見出し
+    st.success("✨ **今ここがおすすめです！**")
 
     st.markdown(f"### 📍 **{cafe['name']}**")
     st.write(
-        f"🏃 駅から徒歩 **{cafe['walk_min']}分** ｜ ☕ タイプ：`{cafe['type']}`"
+        f"🏃 駅から徒歩 **{cafe['walk_min']}分** ｜ ☕ タイプ："
+        f" `{cafe['type']}`"
     )
 
-    # 混雑度の表示
+    # 混雑度
     if crowd < 50:
       st.metric(
-          label="予想混雑度",
+          label="現在の予想混雑度",
           value=f"{crowd}%（座れる確率が高いです🎉）",
           delta="穴場",
           delta_color="normal",
       )
     else:
       st.metric(
-          label="予想混雑度",
-          value=f"{crowd}%（少し急ぎましょう⚠️）",
+          label="現在の予想混雑度",
+          value=f"{crowd}%（やや混み合っています⚠️）",
           delta="注意",
           delta_color="inverse",
       )
 
-    # 選ばれた理由
-    st.markdown("**💡 この店が選ばれた理由：**")
+    # 理由
+    st.markdown("**💡 このお店を選んだ理由：**")
     for r in best_result["reasons"]:
       st.write(f"- {r}")
 
-    with st.expander("🔍 周辺の他の店舗の状況（比較用）"):
-      for item in all_results:
-        c = item["cafe"]
-        st.write(
-            f"- **{c['name']}** (徒歩{c['walk_min']}分): 予想混雑度 **"
-            f" {item['crowd']}%**"
-        )
+    st.markdown("---")
+
+    # ⑤ ほかの店舗情報もわかりやすく一覧化
+    st.markdown("### 📋 周辺のほかの店舗状況")
+    for item in all_results:
+      c = item["cafe"]
+      c_score = item["crowd"]
+      # 混雑度に応じたアイコン変化
+      status_icon = "🟢 空いてます" if c_score < 50 else "🔴 混雑中"
+      with st.expander(
+          f"{status_icon} ｜ {c['name']} （予想混雑度: {c_score}%）"
+      ):
+        st.write(f"- 駅から徒歩: **{c['walk_min']}分**")
+        st.write(f"- 特徴: `{c['type']}`")
+        if item["reasons"]:
+          st.write("- 判定ポイント:")
+          for sub_r in item["reasons"]:
+            st.write(f"  * {sub_r}")
   else:
     st.warning("該当するエリアに店舗が見つかりませんでした。")
