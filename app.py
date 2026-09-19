@@ -1,6 +1,7 @@
 import streamlit as st
 import datetime
 import os
+import json
 from google import genai
 
 # Streamlit ページ設定
@@ -12,7 +13,6 @@ st.write("日本全国の任意の駅名・エリアを入力し、AIのイベ�
 # --- 1. エリア・条件入力エリア ---
 st.subheader("⚙️ 検索条件の設定")
 
-# 全国どのエリアでも自由に入力できる形式
 target_area = st.text_input("検索したい駅名・エリアを入力（例：札幌駅、梅田、博多、名古屋市栄）", "渋谷駅周辺")
 is_rainy = st.checkbox("🌧️ 当日は雨（または雨天予報）", value=False)
 
@@ -28,13 +28,12 @@ def fetch_cafes_and_events_by_ai(area_name, rainy_flag):
     
     try:
         client = genai.Client()
-        # AIに対して、実在する店舗名や正確な情報をJSONや構造化テキストで出力させるプロンプト
         prompt = f"""
         あなたは日本全国の地理とカフェ事情に精通したアシスタントです。
         「{area_name}」の周辺に実在する代表的なカフェ（大手チェーンや有名店など）を3〜4店舗挙げてください。
         また、{area_name}周辺で現在カフェの混雑に影響するようなイベント（ライブ、お祭り、試合など）の有無を推測してください。
         
-        以下のJSON形式（マークダウンのコードブロックなし）で回答してください。
+        以下のJSON形式（マークダウンのコードブロックなし、プレーンなJSONのみ）で回答してください。
         {{
           "has_event": trueまたはfalse,
           "event_comment": "イベントの有無や理由に関する説明文",
@@ -44,9 +43,8 @@ def fetch_cafes_and_events_by_ai(area_name, rainy_flag):
               "address": "おおよその住所",
               "station_direct": trueまたはfalse (駅直結または駅ビル内か),
               "walk_minutes": 駅からの徒歩分数(整数),
-              "base_congestion": 50 (通常の混雑度 0〜100の数値)
-            }},
-            ...
+              "base_congestion": 50
+            }}
           ]
         }}
         """
@@ -56,8 +54,6 @@ def fetch_cafes_and_events_by_ai(area_name, rainy_flag):
             contents=prompt,
         )
         
-        import json
-        # レスポンスからJSON部分を抽出してパース
         text = response.text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
@@ -79,7 +75,6 @@ if st.button("🚀 全国エリアの混雑・穴場を予測する"):
         else:
             st.subheader(f"📍 「{target_area}」の分析結果")
             
-            # イベント情報の表示
             if ai_data.get("has_event"):
                 st.warning(f"⚠️ **周辺イベント情報**: {ai_data.get('event_comment')}")
             else:
@@ -99,20 +94,17 @@ if st.button("🚀 全国エリアの混雑・穴場を予測する"):
                 is_direct = cafe.get("station_direct", False)
                 walk = cafe.get("walk_minutes", 3)
                 
-                # 雨天時の補正ロジック
                 if is_rainy:
                     if is_direct or walk <= 2:
-                        congestion += 25  # 駅チカはさらに混む
+                        congestion += 25
                     else:
-                        congestion -= 15  # 駅から歩くところは空く
+                        congestion -= 15
                 
-                # イベントによる補正
                 if ai_data.get("has_event"):
                     congestion += 20
                     
                 congestion = max(10, min(100, congestion))
                 
-                # 画面表示
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.markdown(f"### **{cafe.get('name')}**")
