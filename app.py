@@ -204,31 +204,31 @@ for cafe in cafes:
 st.divider()
 
 # ==========================================
-# GoogleマップAPIキーを組み込んだ地図表示
+# GoogleマップAPIキーを組み込んだ地図表示（修正版）
 # ==========================================
 st.header("🗺️ 周辺マップ（Google Maps API連携）")
 
 google_api_key = "AIzaSyAN1EEVcNTgNI_Dxu8WBc7XVBTUBOHzVwY"
 
-# Pythonのf-stringとJSの波括弧が衝突しないよう変数を外で埋め込み
-map_html = f"""
+# f-stringを使わず通常の文字列結合にしてSyntaxErrorを完全に防止
+map_html = """
     <div id="map" style="width:100%; height:300px;"></div>
     <script>
-      function initMap() {{
-        const targetLocation = {{ lat: {lat}, lng: {lon} }};
-        const map = new google.maps.Map(document.getElementById("map"), {{
+      function initMap() {
+        const targetLocation = { lat: """ + str(lat) + """, lng: """ + str(lon) + """ };
+        const map = new google.maps.Map(document.getElementById("map"), {
           zoom: 15,
           center: targetLocation,
-        }});
-        new google.maps.Marker({{
+        });
+        new google.maps.Marker({
           position: targetLocation,
           map: map,
           title: "検索中心地",
-        }});
+        });
       }
     </script>
     <script async defer
-      src="https://maps.googleapis.com/maps/api/js?key={google_api_key}&callback=initMap">
+      src="https://maps.googleapis.com/maps/api/js?key=""" + google_api_key + """&callback=initMap">
     </script>
 """
 
