@@ -118,14 +118,18 @@ if "今すぐ" in mode:
   if loc and "coords" in loc:
     lat = loc["coords"]["latitude"]
     lon = loc["coords"]["longitude"]
-    st.success(f"GPS取得成功（緯度: {lat:.2f}, 経度: {lon:.2f}）")
-    target_area = "現在地周辺"
+    st.success(f"GPS取得成功（緯度: {lat:.4f}, 経度: {lon:.4f}）")
+    # 緯度経度からおおよそのエリア名を指定できるようにする、または現在地周辺として入力欄を用意
+    target_area = st.text_input(
+        "🏠 あなたの現在地（駅名・エリア名を入力してください）",
+        value="江東区東陽町周辺",
+        help="GPS座標から自動で場所名が取れないため、お手数ですが現在の最寄駅やエリア名をご入力ください",
+    )
     is_rainy, weather_info_text = get_weather_by_latlon(lat, lon)
   else:
-    st.warning("⚠️ スマホのGPSがうまく取得できませんでした。下のフォームにエリア名を入力してください。")
-    manual_fallback = st.text_input("🔍 代わりのエリア・駅名を入力", value="渋谷駅周辺")
-    target_area = manual_fallback
-    is_rainy, weather_info_text = get_weather_by_latlon(35.6581, 139.7016)
+    st.warning("⚠️ スマホのGPSがうまく取得できませんでした。下のフォームに現在のエリア名を入力してください。")
+    target_area = st.text_input("🔍 現在のエリア・駅名を入力", value="新宿駅周辺")
+    is_rainy, weather_info_text = get_weather_by_latlon(35.6894, 139.6917)
 
   target_datetime = now_jst
   st.info(
@@ -143,7 +147,7 @@ else:
   # 日付選択
   selected_date = st.date_input("📅 日付を選択", date.today())
   
-  # センスの良い時間選択（ラベル付きの辞書で直感的に）
+  # センスの良い時間選択
   time_options = {
       "07:00 (早朝・開店直後)": 7,
       "08:00 (朝活・通勤前)": 8,
@@ -162,12 +166,11 @@ else:
       "21:00 (夜間・静かに過ごせる)": 21,
   }
   
-  selected_time_label = st.selectbox("⏰ 時間帯を選択", list(time_options.keys()), index=8) # デフォルト15:00
+  selected_time_label = st.selectbox("⏰ 時間帯を選択", list(time_options.keys()), index=8)
   selected_hour = time_options[selected_time_label]
   
   target_datetime = datetime.combine(selected_date, time(selected_hour, 0)).replace(tzinfo=JST)
 
-  # 天気はデフォルト（東京基準でシミュレーション）
   is_rainy, weather_info_text = get_weather_by_latlon(35.6894, 139.6917)
   st.info(f"☁️ **天気予報データ**： {weather_info_text}")
 
