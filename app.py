@@ -29,40 +29,60 @@ with col2:
     purpose = st.selectbox("利用目的", ["サクッと（テイクアウト/短時間）", "作業・ノマド（長居傾向）", "おしゃべり・休憩"])
     day_type = st.selectbox("曜日", ["平日", "土日祝"])
 
-# --- 2. 無料データ取得関数 (OpenStreetMap) -----------------------------------
-@st.cache_data(ttl=3600)  # 1時間はデータをキャッシュして高速化
+# --- 2. 無料データ取得関数 (OpenStreetMap / 安定化修正版) -----------------------
+@st.cache_data(ttl=3600)
 def get_cafes_from_osm(area_name):
-    """OpenStreetMapから指定エリアのカフェを検索して取得する関数"""
-    # ジオコーディング（地名 -> 緯度経度）
-    geo_url = f"https://nominatim.openstreetmap.org/search?format=json&q={area_name}&countrycodes=jp"
-    headers = {"User-Agent": "CafeCongestionPredictorApp/1.0"}
+    """地名から緯度経度を取得し、周辺カフェをOverpass APIで取得する"""
+    # 適切なUser-Agentを設定してブロックを回避
+    headers = {
+        "User-Agent": "CafeCongestionPredictorApp/2.0 (contact: test@example.com)"
+    }
     
     try:
-        geo_res = requests.get(geo_url, headers=headers, timeout=5).json()
-        if not geo_res:
-            return None, "指定されたエリアが見つかりませんでした。"
+        # 緯度経度検索 (Nominatim)
+        geo_url = "https://nominatim.openstreetmap.org/search"
+        params = {
+            "q": area_name,
+            "format": "json",
+            "limit": 1,
+            "countrycodes": "jp"
+        }
         
-        lat = float(geo_res[0]["lat"])
-        lon = float(geo_res[0]["lon"])
+        geo_res = requests.get(geo_url, headers=headers, params=params, timeout=10)
         
-        # Overpass API (周辺500mのカフェを検索)
+        if geo_res.status_code != 200:
+            return None, f"エリア検索に失敗しました (Status Code: {geo_res.status_code})"
+            
+        geo_data = geo_res.json()
+        if not geo_data:
+            return None, "指定されたエリアが見つかりませんでした。駅名や市区町村名を変えて試してください。"
+            
+        lat = float(geo_data[0]["lat"])
+        lon = float(geo_data[0]["lon"])
+        
+        # Overpass API (周辺700mのカフェを検索)
         overpass_url = "https://overpass-api.de/api/interpreter"
         query = f"""
-        [out:json][timeout:10];
+        [out:json][timeout:15];
         (
-          node["amenity"="cafe"](around:500,{lat},{lon});
-          way["amenity"="cafe"](around:500,{lat},{lon});
+          node["amenity"="cafe"](around:700,{lat},{lon});
+          way["amenity"="cafe"](around:700,{lat},{lon});
         );
         out body 15;
         """
-        res = requests.post(overpass_url, data={"data": query}, timeout=10).json()
+        
+        op_res = requests.post(overpass_url, data={"data": query}, headers=headers, timeout=15)
+        
+        if op_res.status_code != 200:
+            return None, f"カフェデータの取得に失敗しました (Status Code: {op_res.status_code})"
+            
+        res_json = op_res.json()
         
         cafes = []
-        for item in res.get("elements", []):
+        for item in res_json.get("elements", []):
             tags = item.get("tags", {})
             name = tags.get("name")
             if name:
-                # 大手チェーンかどうかの判定
                 is_chain = any(chain.lower() in name.lower() for chain in MAJOR_CHAINS)
                 cafes.append({
                     "name": name,
@@ -72,35 +92,33 @@ def get_cafes_from_osm(area_name):
                     "opening_hours": tags.get("opening_hours", "情報なし")
                 })
         return cafes, None
+        
+    except requests.exceptions.JSONDecodeError:
+        return None, "データ形式のエラーが発生しました。時間を置いて再試行してください。"
     except Exception as e:
-        return None, f"データ取得エラー: {e}"
+        return None, f"通信エラー: {e}"
 
 # --- 3. 混雑度計算ロジック -----------------------------------------------------
 def calculate_congestion(cafe, weather, time_slot, purpose, day_type):
-    score = 40  # 基準値
+    score = 40
     
-    # 時間帯補正
     if time_slot == "カフェタイム（14時〜17時）":
         score += 25
     elif time_slot == "ランチ帯（11時〜14時）":
         score += 15
         
-    # 天候＆店舗タイプ補正
     if weather == "雨・悪天候":
         if cafe["type"] == "大手チェーン":
-            score += 20  # 駅近チェーンは雨だと混む
+            score += 20
         else:
-            score -= 15  # 個人店・路地裏カフェは雨だと空きやすい
+            score -= 15
             
-    # 休日補正
     if day_type == "土日祝":
         score += 15
         
-    # 目的補正
     if purpose == "作業・ノマド（長居傾向）":
-        score += 10  # 回転率が下がるため実質混雑度UP
+        score += 10
         
-    # スコアを0〜100に収める
     return min(max(score, 10), 95)
 
 # --- 4. 検索＆結果表示 --------------------------------------------------------
@@ -111,17 +129,15 @@ if st.button("🔎 カフェ混雑度を予測する"):
         if error:
             st.error(error)
         elif not cafes:
-            st.warning(f"「{location_name}」の半径500m以内に登録されているカフェが見つかりませんでした。別の大きな駅名やエリア名で試してみてください。")
+            st.warning(f"「{location_name}」周辺に登録されているカフェが見つかりませんでした。別の主要駅名などで試してみてください。")
         else:
             st.success(f"「{location_name}」周辺で {len(cafes)} 件のカフェが見つかりました！")
             st.header("2. 混雑予測結果一覧")
             
-            # 各店舗の予測計算
             results = []
             for cafe in cafes:
                 c_score = calculate_congestion(cafe, weather, time_slot, purpose, day_type)
                 
-                # 状態判定
                 if c_score >= 70:
                     status = "🔴 混雑率高（待ち発生かも）"
                 elif c_score >= 45:
@@ -141,3 +157,4 @@ if st.button("🔎 カフェ混雑度を予測する"):
             st.dataframe(df, use_container_width=True)
             
             st.info("💡 **ヒント**: 雨の日は「大手チェーン」に人が集中しやすいため、少し離れた「個人系・穴場カフェ」を狙うと座れる確率が上がります！")
+            
