@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
-from datetime import datetime, date, time
+from datetime import datetime, timedelta, timezone, date, time
 from streamlit_js_eval import get_geolocation
 
 # ページ設定
@@ -11,6 +11,9 @@ st.title("☕ 未来予測 ＆ 目的別 カフェ混雑・穴場ナビ")
 st.caption("「いつ・どこで・何のために」カフェを探すかに合わせて、混雑度と最適な店舗を予測・判定します。")
 
 st.divider()
+
+# 日本時間（JST）の定義
+JST = timezone(timedelta(hours=9), 'JST')
 
 # ==========================================
 # 1. 「いつ・どこで」モード選択（現在 vs 未来）
@@ -32,13 +35,13 @@ if mode == "今すぐ探す（現在地GPS）":
         st.sidebar.info("現在地未取得のため「東京駅」として計算中")
     
     target_location = "現在地周辺"
-    target_datetime = datetime.now()
+    target_datetime = datetime.now(JST) # 日本時間に修正
 
 else:  # 未来・指定場所で探す
     target_location = st.sidebar.text_input("検索エリア・駅名を入力", value="渋谷駅")
     selected_date = st.sidebar.date_input("日付を選択", date.today())
     selected_time = st.sidebar.time_input("時間を選択", time(15, 0))
-    target_datetime = datetime.combine(selected_date, selected_time)
+    target_datetime = datetime.combine(selected_date, selected_time).replace(tzinfo=JST)
     lat, lon = 35.6580, 139.7016  # 例: 渋谷周辺座標
 
 # ==========================================
@@ -84,7 +87,7 @@ else:
         time_score = 0
         time_msg = "平日のアイドルタイム（狙い目）"
 
-# 天気自動取得（現在の場合のみ取得、未来は手動シミュレーション）
+# 天気自動取得
 is_rain = False
 weather_label = "晴れ/曇り ☀️"
 if mode == "今すぐ探す（現在地GPS）":
@@ -115,12 +118,14 @@ st.divider()
 # ==========================================
 st.header("🏪 周辺カフェの混雑予想 ＆ 目的適性判定")
 
-# 店舗のモデルデータ（属性と特徴）
+# 店舗モデルデータ（営業時間・雰囲気情報付き）
 cafes = [
     {
         "name": "スターバックス（駅ビル直結店）",
         "type": "大手チェーン / 駅直結",
         "dist": "徒歩1分",
+        "open_hour": 7, "close_hour": 22, # 営業時間: 07:00〜22:00
+        "atmosphere": "賑やか・学生〜ビジネス層",
         "is_station": True, "is_far": False,
         "features": {"pc": True, "chat": True, "read": False, "quick": True},
         "turnover_penalty": 10
@@ -129,6 +134,8 @@ cafes = [
         "name": "ドトールコーヒーショップ（駅前）",
         "type": "セルフカフェ / カウンター多め",
         "dist": "徒歩2分",
+        "open_hour": 6, "close_hour": 21, # 営業時間: 06:00〜21:00
+        "atmosphere": "サクッと利用・会社員多め",
         "is_station": False, "is_far": False,
         "features": {"pc": False, "chat": True, "read": False, "quick": True},
         "turnover_penalty": -10
@@ -137,6 +144,8 @@ cafes = [
         "name": "コメダ珈琲店（大通り沿い店）",
         "type": "ボックス席メイン / 滞在型",
         "dist": "徒歩5分",
+        "open_hour": 7, "close_hour": 23, # 営業時間: 07:00〜23:00
+        "atmosphere": "落ち着いたボックス席・ファミリー・シニア層",
         "is_station": False, "is_far": False,
         "features": {"pc": True, "chat": True, "read": True, "quick": False},
         "turnover_penalty": 20
@@ -145,6 +154,8 @@ cafes = [
         "name": "隠れ家ロースターカフェ（2階）",
         "type": "個人経営 / 静かな空間",
         "dist": "徒歩8分",
+        "open_hour": 11, "close_hour": 19, # 営業時間: 11:00〜19:00
+        "atmosphere": "静か・大人の隠れ家・おひとり様多め",
         "is_station": False, "is_far": True,
         "features": {"pc": False, "chat": False, "read": True, "quick": False},
         "turnover_penalty": 15
@@ -152,6 +163,10 @@ cafes = [
 ]
 
 for cafe in cafes:
+    # 営業時間チェック判定
+    current_target_hour = target_datetime.hour
+    is_open = cafe["open_hour"] <= current_target_hour < cafe["close_hour"]
+
     # --- A. 混雑スコア計算 ---
     score = 15 + time_score
     if is_rain:
@@ -188,6 +203,7 @@ for cafe in cafes:
         with col_main:
             st.markdown(f"### ☕ {cafe['name']}")
             st.write(f"特徴: **{cafe['type']}** ／ 距離: **{cafe['dist']}**")
+            st.caption(f"🕒 営業時間: {cafe['open_hour']}:00 〜 {cafe['close_hour']}:00 ／ 👥 雰囲気: {cafe['atmosphere']}")
             
             # 理由解説
             reasons = []
@@ -208,7 +224,9 @@ for cafe in cafes:
                     st.write(f"⚠️ {um}")
 
         with col_status:
-            if final_score >= 70:
+            if not is_open:
+                st.error("🔒 営業時間外")
+            elif final_score >= 70:
                 st.error(f"混雑度: **{final_score}%**\n\n🚨 満席リスク高")
             elif final_score >= 40:
                 st.warning(f"混雑度: **{final_score}%**\n\n⚠️ タイミング次第")
