@@ -73,6 +73,7 @@ def fetch_cafes_by_ai(area_name, is_rainy, current_hour):
         }}
         """
 
+    # 最新の推奨モデルに更新
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt,
@@ -120,8 +121,7 @@ if "今すぐ" in mode:
     st.success(
         f"GPS取得成功（緯度: {lat:.2f}, 経度: {lon:.2f}）。位置情報を元にエリアを特定します。"
     )
-    # 簡易的に緯度経度からエリア名を推定、またはデフォルトの現在地周辺へ
-    target_area = "渋谷駅周辺"  # ※実運用では逆ジオコーディング等に拡張可能
+    target_area = "渋谷駅周辺"  # 実運用では逆ジオコーディング等に対応可能
     is_rainy, weather_info_text = get_weather_by_latlon(lat, lon)
   else:
     st.info(
@@ -148,7 +148,6 @@ else:
   with col_t2:
     is_weekend = st.checkbox("土日祝日ですか？", value=False)
 
-  # 手動モードでもエリアの代表地点座標等から天気を自動取得（今回は東京を基準とする例、必要に応じ拡張可）
   is_rainy, weather_info_text = get_weather_by_latlon(35.6894, 139.6917)
   st.info(f"☁️ **自動取得した天気予報**： {weather_info_text}")
 
