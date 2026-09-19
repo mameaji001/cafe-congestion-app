@@ -1,6 +1,4 @@
 from datetime import datetime
-import json
-import os
 import requests
 import streamlit as st
 from streamlit_js_eval import get_geolocation
@@ -18,57 +16,22 @@ st.caption(
 st.markdown("---")
 
 # ==========================================
-# 1. 場所の指定（GPS自動取得 ＆ 手動検索の切り替え）
-# ==========================================
-st.subheader("📍 場所の指定")
-
-location_mode = st.radio(
-    "場所の指定方法を選択",
-    ["📍 現在地（GPS）を使う", "✏️ 行き先の駅名・エリアを手動で入力する"],
-    horizontal=True,
-)
-
-target_area = "渋谷駅周辺"  # デフォルト
-
-if "GPS" in location_mode:
-  st.write("GPSから現在地を取得中...")
-  loc = get_geolocation()
-  if loc and "coords" in loc:
-    lat = loc["coords"]["latitude"]
-    lon = loc["coords"]["longitude"]
-    st.success(
-        f"✅ GPS取得成功（緯度: {lat:.4f}, 経度: {lon:.4f}） -> 周辺エリアを自動設定します"
-    )
-    target_area = "渋谷駅周辺"
-  else:
-    st.info(
-        "💡 ブラウザの位置情報ポップアップで「許可」を選択するか、下の「手動入力」をご利用ください。"
-    )
-    target_area = "渋谷駅周辺"
-else:
-  target_area = st.text_input(
-      "🔍 調べたい駅名・エリア名を入力してください",
-      value="水道橋駅周辺",
-      placeholder="例：新宿三丁目、横浜駅、名古屋栄",
-  )
-
-st.markdown("---")
-
-# ==========================================
-# 2. 自動取得データ（時間・天気・気温）
+# 1. 現在時刻と環境データの取得（確実なリアルタイム反映）
 # ==========================================
 now = datetime.now()
 current_hour = now.hour
 current_minute = now.minute
 is_weekend = now.weekday() >= 5
 
+# 天気・気温の自動取得（デフォルト東京座標）
 temp = 20.0
 weather_text = "晴れ ☀️"
 weather_code = 0
 
 try:
   weather_res = requests.get(
-      "https://api.open-meteo.com/v1/forecast?latitude=35.6812&longitude=139.7671&current_weather=true"
+      "https://api.open-meteo.com/v1/forecast?latitude=35.6812&longitude=139.7671&current_weather=true",
+      timeout=3,
   ).json()
   current_w = weather_res.get("current_weather", {})
   temp = current_w.get("temperature", 20.0)
@@ -82,13 +45,50 @@ try:
 except Exception:
   pass
 
-st.subheader("🤖 自動コンテキスト（環境・時間解析）")
+st.subheader("🤖 現在の環境コンテキスト")
 col_c1, col_c2, col_c3 = st.columns(3)
 col_c1.metric(
     "現在時刻", f"{current_hour:02d}:{current_minute:02d}", "土日祝" if is_weekend else "平日"
 )
 col_c2.metric("現在の気温", f"{temp} ℃")
 col_c3.metric("現在の天候", weather_text)
+
+st.markdown("---")
+
+# ==========================================
+# 2. 場所の指定（GPS自動取得 ＆ 手動検索）
+# ==========================================
+st.subheader("📍 場所の指定")
+
+location_mode = st.radio(
+    "場所の指定方法を選択",
+    ["📍 現在地（GPS）を使う", "✏️ 行き先の駅名・エリアを手動で入力する"],
+    horizontal=True,
+)
+
+target_area = "東京駅周辺"  # デフォルトフォールバック
+
+if "GPS" in location_mode:
+  st.write("🔄 GPSから現在地を取得中...")
+  loc = get_geolocation()
+  if loc and "coords" in loc:
+    lat = loc["coords"]["latitude"]
+    lon = loc["coords"]["longitude"]
+    st.success(
+        f"✅ GPS取得成功（緯度: {lat:.4f}, 経度: {lon:.4f}） -> 現在地周辺として設定します"
+    )
+    target_area = "現在地周辺"
+  else:
+    st.info(
+        "💡 ブラウザの位置情報ポップアップで「許可」を選択してください。（未取得の場合は「東京駅周辺」で計算します）"
+    )
+    target_area = "東京駅周辺"
+else:
+  target_area = st.text_input(
+      "🔍 調べたい駅名・エリア名を入力してください",
+      value="水道橋駅周辺",
+      placeholder="例：新宿三丁目、横浜駅、東京駅",
+  )
 
 st.markdown("---")
 
@@ -127,11 +127,11 @@ def get_real_cafes_for_area(area_name):
             "type": "落ち着いた空間・ゆったり",
         },
     ]
-  else:
+  elif "東京" in area_name:
     return [
         {
-            "name": "スターバックスコーヒー 渋谷マークシティ店",
-            "address": "渋谷区道玄坂1-12-1",
+            "name": "スターバックスコーヒー 東京駅グランルーフフロント店",
+            "address": "千代田区丸の内1-9-1",
             "station_direct": True,
             "walk_min": 1,
             "open_hour": 7,
@@ -139,27 +139,58 @@ def get_real_cafes_for_area(area_name):
             "type": "駅直結・大人気",
         },
         {
-            "name": "ドトールコーヒーショップ 渋谷道玄坂店",
-            "address": "渋谷区道玄坂2-29-8",
-            "station_direct": False,
-            "walk_min": 4,
+            "name": "カフェ エクセシオール 東京駅店",
+            "address": "千代田区丸の内1-9-1",
+            "station_direct": True,
+            "walk_min": 2,
             "open_hour": 7,
             "close_hour": 21,
             "type": "サクッと休憩・回転早い",
         },
         {
-            "name": "渋カフェ 隠れ家ロースター",
-            "address": "渋谷区円山町5-3",
+            "name": "丸の内カフェ",
+            "address": "千代田区丸の内2-4-1",
             "station_direct": False,
-            "walk_min": 8,
-            "open_hour": 11,
+            "walk_min": 5,
+            "open_hour": 8,
+            "close_hour": 23,
+            "type": "ゆったり・広め",
+        },
+    ]
+  else:
+    # 汎用/現在地周辺向け
+    return [
+        {
+            "name": f"スターバックスコーヒー {area_name}店",
+            "address": "駅前ビル1F",
+            "station_direct": True,
+            "walk_min": 1,
+            "open_hour": 7,
+            "close_hour": 22,
+            "type": "駅近・作業向き",
+        },
+        {
+            "name": f"ドトールコーヒーショップ {area_name}駅前店",
+            "address": "駅前ロータリー沿い",
+            "station_direct": True,
+            "walk_min": 2,
+            "open_hour": 7,
+            "close_hour": 21,
+            "type": "サクッと休憩・回転早い",
+        },
+        {
+            "name": f"隠れ家ロースター {area_name}店",
+            "address": "駅から少し離れた通り",
+            "station_direct": False,
+            "walk_min": 7,
+            "open_hour": 10,
             "close_hour": 20,
             "type": "穴場・落ち着いた空間",
         },
     ]
 
 
-st.subheader("🏪 周辺カフェの営業時間 ＆ 混雑・快適度予測")
+st.subheader(f"🏪 「{target_area}」周辺カフェの混雑・快適度予測")
 st.caption(
     "「寒すぎる・暑すぎるから歩きたくない」「雨だから駅直結に人が集中する」といった人間の心理と、現在の営業状況をリアルタイムで反映しています。"
 )
